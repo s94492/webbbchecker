@@ -162,11 +162,9 @@ async function generateWebsitePDF(website, stats, metrics, timeRange) {
       doc.fontSize(28).fillColor('#1976D2')
          .font('NotoSansTC')
          .text(`${website.name}-監控報表`, marginX, titleY, { align: 'center', width: contentWidth });
-
-      // 網址 - 12pt斜體，置於標題正下方
-      doc.fontSize(12).fillColor('#666')
-         .font('NotoSansTC', 'italic')
-         .text(website.url, marginX, titleY + 35, { align: 'left', width: contentWidth });
+      
+      doc.fontSize(14).fillColor('#666')
+         .text(website.url, marginX, 75, { align: 'center', width: contentWidth });
       
       // 分隔線 - 居中對稱
       doc.moveTo(marginX, 140)
@@ -232,15 +230,15 @@ async function generateWebsitePDF(website, stats, metrics, timeRange) {
         ];
         
         kpiCards.forEach((kpi, index) => {
-          const cardX = marginX + 10 + (index * 165);
-          const cardWidth = 155;
+          const cardX = 50 + (index * 170);
+          const cardWidth = 160;
           const cardHeight = 100;
-
-          // 卡片背景 - 統一邊框粗細為2px
+          
+          // 卡片背景
           doc.roundedRect(cardX, kpiY, cardWidth, cardHeight, 8)
              .lineWidth(2)
-             .strokeColor('#2196F3')  // 統一使用藍色邊框
-             .fillAndStroke('#FFFFFF', '#2196F3');
+             .strokeColor(kpi.color)
+             .fillAndStroke('#FFFFFF', kpi.color);
           
           // 標題（上方置中）
           doc.fontSize(12).fillColor('#666')
@@ -266,11 +264,9 @@ async function generateWebsitePDF(website, stats, metrics, timeRange) {
            .font('NotoSansTC')
            .text('監控洞察', marginX, issueY);
         
-        // 洞察框 - 統一邊框樣式
+        // 洞察框 - 增加高度容納完整文字
         doc.roundedRect(marginX, issueY + 30, contentWidth, 110, 5)
-           .lineWidth(2)
-           .strokeColor('#2196F3')
-           .fillAndStroke('#F8F9FA', '#2196F3');
+           .fillAndStroke('#F8F9FA', '#E0E0E0');
         
       // AI 分析已在函數開頭生成
         
@@ -314,13 +310,10 @@ async function generateWebsitePDF(website, stats, metrics, timeRange) {
           insightY += Math.max(textHeight + 8, 24); // 動態間距，至少24px
         });
         
-        // 頁尾資訊 - 統一置於頁面底部中央，8pt字體
-        const footerY = doc.page.height - 40;
+        // 頁尾資訊（調整到更安全位置）
         doc.fontSize(8).fillColor('#999')
-           .text(`生成時間：${currentTime} | 第 1 頁，共 2 頁`, 0, footerY, {
-             align: 'center',
-             width: doc.page.width
-           });
+           .text(`報表生成時間：${currentTime}`, marginX, 700)
+           .text('第 1 頁，共 2 頁', 500, 700, { width: 50, align: 'right' });
         
         // ========== 第2頁：性能分析 ==========
         doc.addPage();
@@ -339,16 +332,13 @@ async function generateWebsitePDF(website, stats, metrics, timeRange) {
              .font('NotoSansTC')
              .text('24小時響應時間趨勢', marginX, 110);
           
-          // 圖表位置 - 固定於頁面中部，上下留白20%
-          const chartY = doc.page.height * 0.25;  // 25%位置開始
-          const chartHeight = doc.page.height * 0.3;  // 佔頁面30%高度
-          drawEnhancedResponseChart(doc, metrics, marginX, chartY, timeRange, chartHeight);
+          drawEnhancedResponseChart(doc, metrics, marginX, 140, timeRange);
           
           // 圖表說明已整合在圖例中，移除重複文字
         }
         
-        // 性能指標詳情 - 調整位置避免擠壓圖表
-        const metricsDetailY = doc.page.height * 0.58;  // 58%位置開始
+        // 性能指標詳情
+        const metricsDetailY = 400;
         doc.fontSize(18).fillColor('#333')
            .font('NotoSansTC')
            .text('詳細性能指標', marginX, metricsDetailY);
@@ -363,11 +353,9 @@ async function generateWebsitePDF(website, stats, metrics, timeRange) {
           { label: '連續運行時間', value: calculateContinuousUptime(metrics), status: '當前' }
         ];
         
-        // 表格背景 - 統一邊框樣式
+        // 表格背景 - 縮小高度
         doc.roundedRect(marginX, metricsDetailY + 30, contentWidth, 120, 5)
-           .lineWidth(2)
-           .strokeColor('#2196F3')
-           .fillAndStroke('#FAFAFA', '#2196F3');
+           .fillAndStroke('#FAFAFA', '#E0E0E0');
         
         // 表格內容 - 縮小行高和字體
         doc.fontSize(10);
@@ -396,17 +384,15 @@ async function generateWebsitePDF(website, stats, metrics, timeRange) {
                  70, metricsDetailY + 160, { width: 460, align: 'left' });
       }
       
-      // AI 智能建議區塊 - 調整位置
-      const aiSectionY = doc.page.height * 0.75;  // 75%位置開始
+      // AI 智能建議區塊
+      const aiSectionY = 580;
       doc.fontSize(18).fillColor('#333')
          .font('NotoSansTC')
          .text('AI 智能建議', marginX, aiSectionY);
       
-      // AI 建議框 - 統一邊框樣式
-      doc.roundedRect(marginX, aiSectionY + 25, contentWidth, 90, 5)
-         .lineWidth(2)
-         .strokeColor('#2196F3')
-         .fillAndStroke('#F0F8FF', '#2196F3');
+      // AI 建議框 - 增加高度容納完整內容
+      doc.roundedRect(marginX, aiSectionY + 25, contentWidth, 110, 5)
+         .fillAndStroke('#F0F8FF', '#B3D4FC');
       
       // 獲取優先建議
       const recommendations = aiAnalysis.recommendations || [];
@@ -454,14 +440,13 @@ async function generateWebsitePDF(website, stats, metrics, timeRange) {
                  });
       }
       
-      // 頁尾資訊 - 統一置於頁面底部中央，8pt字體
-      const page2FooterY = doc.page.height - 30;
+      // 頁尾 - 對齊到 AI 建議框的最下方
+      const footerY = aiSectionY + 25 + 110 + 10; // AI框底部 + 10像素間距
+      
       doc.fontSize(8).fillColor('#999')
          .font('NotoSansTC')
-         .text(`生成時間：${currentTime} | 第 2 頁，共 2 頁`, 0, page2FooterY, {
-           align: 'center',
-           width: doc.page.width
-         });
+         .text(`報表生成時間：${currentTime}`, 65, footerY)
+         .text('第 2 頁，共 2 頁', 450, footerY, { width: 85, align: 'right' });
       
       doc.end();
     } catch (error) {

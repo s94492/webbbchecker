@@ -1,0 +1,42 @@
+{
+  "name": "website-monitor-backend",
+  "version": "1.0.0",
+  "description": "Website Monitor Backend API",
+  "main": "src/app.js",
+  "scripts": {
+    "start": "node src/app.js",
+    "dev": "nodemon src/app.js",
+    "test": "jest"
+  },
+  "dependencies": {
+    "@influxdata/influxdb-client": "^1.33.2",
+    "@influxdata/influxdb-client-apis": "^1.35.0",
+    "axios": "^1.6.2",
+    "cors": "^2.8.5",
+    "express": "^4.18.2",
+    "helmet": "^7.1.0",
+    "joi": "^17.11.0",
+    "moment": "^2.29.4",
+    "morgan": "^1.10.0",
+    "multer": "^2.0.2",
+    "node-cron": "^3.0.3",
+    "nodemailer": "^7.0.6",
+    "openai": "^5.20.0",
+    "pdfkit": "^0.15.0",
+    "tls": "^0.0.1",
+    "url": "^0.11.3",
+    "uuid": "^9.0.1"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "nodemon": "^3.0.2"
+  },
+  "keywords": [
+    "website",
+    "monitor",
+    "express",
+    "api"
+  ],
+  "author": "System Engineer",
+  "license": "MIT"
+}
