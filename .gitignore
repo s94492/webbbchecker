@@ -1,1 +1,67 @@
+# 資料目錄
 data/
+tmp/
+
+# 環境設定檔（包含敏感資料）
+.env
+.env.local
+.env.production
+
+# Node.js 相關
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+package-lock.json
+yarn.lock
+
+# Docker 相關
+docker-compose.override.yml
+
+# 編輯器設定
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# 日誌檔案
+*.log
+logs/
+
+# 大型字體檔案
+
+# 測試檔案
+test*.pdf
+test*.js
+test*.txt
+*.test.js
+*.spec.js
+
+# 備份檔案
+*.bak
+*.backup
+*.old
+
+# Python 相關
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+venv/
+env/
+
+# 憑證和金鑰
+*.pem
+*.key
+*.crt
+*.cert
+
+# 資料庫檔案
+*.db
+*.sqlite
+*.sqlite3
+
+# Claude 本地設定
+.claude/settings.local.json
