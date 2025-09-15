@@ -1,0 +1,17 @@
+[
+  {
+    "content": "分析多節點監控架構需求",
+    "status": "in_progress",
+    "activeForm": "分析多節點監控架構需求"
+  },
+  {
+    "content": "設計Prometheus多節點方案",
+    "status": "pending",
+    "activeForm": "設計Prometheus多節點方案"
+  },
+  {
+    "content": "評估當前架構的多節點限制",
+    "status": "pending",
+    "activeForm": "評估當前架構的多節點限制"
+  }
+]

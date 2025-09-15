@@ -1,0 +1,17 @@
+[
+  {
+    "content": "檢查網路配置和防火牆",
+    "status": "completed",
+    "activeForm": "已完成檢查網路配置和防火牆"
+  },
+  {
+    "content": "檢查服務狀態",
+    "status": "completed",
+    "activeForm": "已完成檢查服務狀態"
+  },
+  {
+    "content": "修復API路徑設定",
+    "status": "in_progress",
+    "activeForm": "修復API路徑設定"
+  }
+]

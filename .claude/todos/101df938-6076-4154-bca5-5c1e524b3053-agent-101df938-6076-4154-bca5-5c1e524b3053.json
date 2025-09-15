@@ -1,0 +1,27 @@
+[
+  {
+    "content": "Examine the codebase structure and identify API/web scraping code",
+    "status": "completed",
+    "activeForm": "Examining codebase structure and identifying API/web scraping code"
+  },
+  {
+    "content": "Analyze the failing API calls and error patterns",
+    "status": "completed",
+    "activeForm": "Analyzing failing API calls and error patterns"
+  },
+  {
+    "content": "Check if backend service is running",
+    "status": "in_progress",
+    "activeForm": "Checking if backend service is running"
+  },
+  {
+    "content": "Start the backend service",
+    "status": "pending",
+    "activeForm": "Starting the backend service"
+  },
+  {
+    "content": "Verify API endpoints are accessible",
+    "status": "pending",
+    "activeForm": "Verifying API endpoints are accessible"
+  }
+]

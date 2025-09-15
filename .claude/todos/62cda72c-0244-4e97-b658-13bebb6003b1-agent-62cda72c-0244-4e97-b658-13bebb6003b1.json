@@ -1,0 +1,17 @@
+[
+  {
+    "content": "Debug Prometheus-Grafana connection",
+    "status": "in_progress",
+    "activeForm": "Debugging Prometheus-Grafana connection"
+  },
+  {
+    "content": "Fix datasource connection",
+    "status": "pending",
+    "activeForm": "Fixing datasource connection"
+  },
+  {
+    "content": "Test complete fix",
+    "status": "pending",
+    "activeForm": "Testing complete fix"
+  }
+]

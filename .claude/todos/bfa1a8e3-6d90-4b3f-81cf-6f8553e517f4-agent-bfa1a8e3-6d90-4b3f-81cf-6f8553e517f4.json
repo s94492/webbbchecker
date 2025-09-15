@@ -1,0 +1,27 @@
+[
+  {
+    "content": "Stop all non-project Docker containers",
+    "status": "completed",
+    "activeForm": "Stopping all non-project Docker containers"
+  },
+  {
+    "content": "Start the monitoring project services",
+    "status": "completed",
+    "activeForm": "Starting the monitoring project services"
+  },
+  {
+    "content": "Fix frontend npm install issue",
+    "status": "completed",
+    "activeForm": "Fixing frontend npm install issue"
+  },
+  {
+    "content": "Fix notification service npm install issue",
+    "status": "completed",
+    "activeForm": "Fixing notification service npm install issue"
+  },
+  {
+    "content": "Start all services successfully",
+    "status": "in_progress",
+    "activeForm": "Starting all services successfully"
+  }
+]

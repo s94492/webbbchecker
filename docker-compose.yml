@@ -1,0 +1,103 @@
+version: '3.8'
+
+services:
+  # Nginx 反向代理
+  nginx:
+    image: nginx:alpine
+    container_name: website-monitor-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf
+      - ./nginx/ssl:/etc/nginx/ssl
+    depends_on:
+      - frontend
+      - backend
+      - grafana
+    networks:
+      - website-monitor-network
+    restart: unless-stopped
+
+  # 前端 React 應用
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: frontend
+    environment:
+      - REACT_APP_API_URL=${HOST_IP:-http://localhost}/api
+      - REACT_APP_GRAFANA_URL=${HOST_IP:-http://localhost}/grafana
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    networks:
+      - website-monitor-network
+    restart: unless-stopped
+
+  # 後端 Express API
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: backend
+    environment:
+      - NODE_ENV=production
+      - PORT=3001
+      - INFLUXDB_URL=http://influxdb:8086
+      - INFLUXDB_TOKEN=${INFLUXDB_TOKEN:-mytoken}
+      - INFLUXDB_ORG=${INFLUXDB_ORG:-myorg}
+      - INFLUXDB_BUCKET=${INFLUXDB_BUCKET:-website-monitor}
+      - HOST_IP=${HOST_IP:-http://localhost}
+    volumes:
+      - ./NotoSansTC-VariableFont_wght.ttf:/app/fonts/NotoSansTC.ttf:ro
+    depends_on:
+      - influxdb
+    networks:
+      - website-monitor-network
+    restart: unless-stopped
+
+  # InfluxDB 時間序列資料庫
+  influxdb:
+    image: influxdb:2.7-alpine
+    container_name: website-monitor-influxdb
+    environment:
+      - DOCKER_INFLUXDB_INIT_MODE=setup
+      - DOCKER_INFLUXDB_INIT_USERNAME=admin
+      - DOCKER_INFLUXDB_INIT_PASSWORD=password123
+      - DOCKER_INFLUXDB_INIT_ORG=myorg
+      - DOCKER_INFLUXDB_INIT_BUCKET=website-monitor
+      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=mytoken
+    volumes:
+      - ./data/influxdb/data:/var/lib/influxdb2
+      - ./data/influxdb/config:/etc/influxdb2
+    ports:
+      - "8086:8086"
+    networks:
+      - website-monitor-network
+    restart: unless-stopped
+
+  # Grafana 視覺化工具
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_INSTALL_PLUGINS=grafana-clock-panel,grafana-simple-json-datasource
+      - GF_SERVER_ROOT_URL=${HOST_IP:-http://localhost}/grafana
+      - GF_SERVER_SERVE_FROM_SUB_PATH=true
+    volumes:
+      - ./data/grafana:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning
+      - ./grafana/dashboards:/var/lib/grafana/dashboards
+    depends_on:
+      - influxdb
+    networks:
+      - website-monitor-network
+    restart: unless-stopped
+
+# volumes 已改為本地目錄掛載，不需要 Docker volumes
+
+networks:
+  website-monitor-network:
+    driver: bridge

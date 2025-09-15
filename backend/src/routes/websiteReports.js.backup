@@ -1,0 +1,2157 @@
+const express = require('express');
+const router = express.Router();
+const PDFDocument = require('pdfkit');
+const fs = require('fs');
+const path = require('path');
+const moment = require('moment');
+const WebsiteService = require('../services/WebsiteStorage');
+const axios = require('axios');
+
+const websiteService = new WebsiteService();
+
+// 生成單個網站的 PDF 報表
+router.get('/:websiteId/pdf', async (req, res) => {
+  try {
+    const { websiteId } = req.params;
+    const { range = '24h' } = req.query;
+
+    console.log(`生成網站 ${websiteId} 的 PDF 報表，時間範圍: ${range}`);
+
+    // 獲取網站資訊
+    const website = await websiteService.getById(websiteId);
+    if (!website) {
+      return res.status(404).json({
+        error: '找不到指定網站'
+      });
+    }
+
+    // 獲取網站統計數據
+    let stats = null;
+    let metrics = [];
+    try {
+      const statsResponse = await axios.get(`http://localhost:3001/api/metrics/${websiteId}/stats?range=${range}`);
+      stats = statsResponse.data.data;
+      
+      const metricsResponse = await axios.get(`http://localhost:3001/api/metrics/${websiteId}?range=${range}`);
+      metrics = metricsResponse.data.data || [];
+    } catch (error) {
+      console.log('獲取統計數據失敗，使用預設值:', error.message);
+    }
+
+    // 使用2頁精華版PDF生成
+    console.log('使用2頁精華版PDF生成模式');
+    const pdfBuffer = await generateWebsitePDF(website, stats, metrics, range);
+
+    // 設定檔案名稱
+    const timestamp = moment().format('YYYYMMDD_HHmmss');
+    const filename = `${website.name}_report_${range}_${timestamp}.pdf`;
+
+    // 設定回應標頭
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(filename)}"`);
+    res.setHeader('Content-Length', pdfBuffer.length);
+
+    // 發送PDF
+    res.send(pdfBuffer);
+
+    console.log(`PDF報表生成成功: ${filename}`);
+
+  } catch (error) {
+    console.error('PDF報表生成失敗:', error);
+    res.status(500).json({
+      error: 'PDF報表生成失敗',
+      message: error.message
+    });
+  }
+});
+
+// 生成單個網站的 CSV 報表
+router.get('/:websiteId/csv', async (req, res) => {
+  try {
+    const { websiteId } = req.params;
+    const { range = '24h' } = req.query;
+
+    console.log(`生成網站 ${websiteId} 的 CSV 報表，時間範圍: ${range}`);
+
+    // 獲取網站資訊
+    const website = await websiteService.getById(websiteId);
+    if (!website) {
+      return res.status(404).json({
+        error: '找不到指定網站'
+      });
+    }
+
+    // 獲取監控數據
+    let metrics = [];
+    try {
+      const metricsResponse = await axios.get(`http://localhost:3001/api/metrics/${websiteId}?range=${range}`);
+      metrics = metricsResponse.data.data || [];
+    } catch (error) {
+      console.log('獲取監控數據失敗:', error.message);
+    }
+
+    // 生成CSV內容
+    const csvContent = generateWebsiteCSV(website, metrics, range);
+
+    // 設定檔案名稱
+    const timestamp = moment().format('YYYYMMDD_HHmmss');
+    const filename = `${website.name}_data_${range}_${timestamp}.csv`;
+
+    // 設定回應標頭
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(filename)}"`);
+
+    // 添加 UTF-8 BOM 讓 Excel 正確識別中文
+    res.write('\uFEFF');
+    res.end(csvContent);
+
+    console.log(`CSV報表生成成功: ${filename}`);
+
+  } catch (error) {
+    console.error('CSV報表生成失敗:', error);
+    res.status(500).json({
+      error: 'CSV報表生成失敗',
+      message: error.message
+    });
+  }
+});
+
+// 預覽報表數據
+router.get('/:websiteId/preview', async (req, res) => {
+  try {
+    const { websiteId } = req.params;
+    const { range = '24h' } = req.query;
+
+    // 獲取網站資訊
+    const website = await websiteService.getById(websiteId);
+    if (!website) {
+      return res.status(404).json({
+        error: '找不到指定網站'
+      });
+    }
+
+    // 獲取統計數據
+    let stats = null;
+    try {
+      const statsResponse = await axios.get(`http://localhost:3001/api/metrics/${websiteId}/stats?range=${range}`);
+      stats = statsResponse.data.data;
+    } catch (error) {
+      console.log('獲取統計數據失敗:', error.message);
+    }
+
+    res.json({
+      success: true,
+      data: {
+        website: {
+          id: website.id,
+          name: website.name,
+          url: website.url,
+          status: website.status
+        },
+        stats,
+        timeRange: range
+      }
+    });
+
+  } catch (error) {
+    console.error('生成報表預覽失敗:', error);
+    res.status(500).json({
+      error: '生成報表預覽失敗',
+      message: error.message
+    });
+  }
+});
+
+// PDF生成函數 - 2頁精華版
+async function generateWebsitePDF(website, stats, metrics, timeRange) {
+  return new Promise((resolve, reject) => {
+    try {
+      const doc = new PDFDocument({ 
+        margin: 50,
+        lineGap: 2,
+        wordSpacing: 1,
+        characterSpacing: 0.5,
+        info: {
+          Title: `${website.name} 監控報表`,
+          Author: 'Website Monitor System',
+          Subject: '網站監控數據報表',
+          Keywords: '監控, 性能, 可用性, 報表'
+        }
+      });
+      const chunks = [];
+      
+      doc.on('data', (chunk) => chunks.push(chunk));
+      doc.on('end', () => resolve(Buffer.concat(chunks)));
+      
+      // 註冊中文字體
+      const fontPath = '/app/fonts/NotoSansTC.ttf';
+      if (fs.existsSync(fontPath)) {
+        console.log('使用 Noto Sans TC 中文字體');
+        doc.registerFont('NotoSansTC', fontPath);
+        doc.font('NotoSansTC');
+      } else {
+        console.log('找不到中文字體檔案，使用預設字體');
+      }
+      
+      const timeRangeText = getTimeRangeText(timeRange);
+      const currentTime = moment().utc().utcOffset(8).format('YYYY-MM-DD HH:mm:ss');
+      
+      // ========== 第1頁：執行摘要 ==========
+      
+      // 頁首設計 - 更專業的樣式
+      doc.rect(0, 0, doc.page.width, 3).fill('#1976D2');
+      
+      // 公司/系統標識（左上角）
+      doc.fontSize(10).fillColor('#666')
+         .text('網站監控系統', 50, 30)
+         .fontSize(8).fillColor('#999')
+         .text('自動生成報表', 50, 45);
+      
+      // 報表類型（右上角）
+      doc.fontSize(10).fillColor('#666')
+         .text('性能監控報表', 450, 30, { width: 100, align: 'right' })
+         .fontSize(8).fillColor('#999')
+         .text(timeRangeText, 450, 45, { width: 100, align: 'right' });
+      
+      // 主標題
+      doc.fontSize(28).fillColor('#1976D2')
+         .font('NotoSansTC')
+         .text(website.name, 50, 80, { align: 'center', width: 500 });
+      
+      doc.fontSize(12).fillColor('#666')
+         .text(website.url, 50, 115, { align: 'center', width: 500 });
+      
+      // 分隔線
+      doc.moveTo(50, 140)
+         .lineTo(550, 140)
+         .strokeColor('#E0E0E0')
+         .lineWidth(0.5)
+         .stroke();
+      
+      // 執行摘要區塊
+      doc.fontSize(16).fillColor('#333')
+         .font('NotoSansTC')
+         .text('執行摘要', 50, 160);
+      
+      // 狀態總結（大卡片）
+      const summaryBoxY = 190;
+      const statusColor = stats.uptime >= 99.9 ? '#4CAF50' : 
+                         stats.uptime >= 99 ? '#FF9800' : '#F44336';
+      const statusText = stats.uptime >= 99.9 ? '系統運行優秀' : 
+                        stats.uptime >= 99 ? '系統運行穩定' : '系統需要關注';
+      const statusIcon = stats.uptime >= 99.9 ? '✅' : 
+                        stats.uptime >= 99 ? '⚠️' : '❌';
+      
+      // 狀態背景框
+      doc.roundedRect(50, summaryBoxY, 500, 60, 5)
+         .fillAndStroke('#FAFAFA', statusColor);
+      
+      doc.fontSize(24).fillColor(statusColor)
+         .text(`${statusIcon} ${statusText}`, 70, summaryBoxY + 20, { width: 460 });
+      
+      doc.fontSize(11).fillColor('#666')
+         .text(`基於過去${timeRangeText}的監控數據分析`, 70, summaryBoxY + 45, { width: 460 });
+      
+      // 關鍵績效指標（3個大卡片）
+      doc.fontSize(16).fillColor('#333')
+         .font('NotoSansTC')
+         .text('關鍵績效指標', 50, 270);
+      
+      if (stats) {
+        const kpiY = 300;
+        const kpiCards = [
+          {
+            title: '系統可用性',
+            value: `${stats.uptime}%`,
+            subtitle: stats.uptime >= 99.9 ? 'SLA達標' : stats.uptime >= 99 ? '接近目標' : '低於標準',
+            color: stats.uptime >= 99.9 ? '#4CAF50' : stats.uptime >= 99 ? '#FF9800' : '#F44336',
+            icon: '📊'
+          },
+          {
+            title: '平均回應時間',
+            value: formatResponseTime(stats.avgResponseTime),
+            subtitle: stats.avgResponseTime < 500 ? '性能優秀' : stats.avgResponseTime < 1000 ? '性能良好' : '需要優化',
+            color: stats.avgResponseTime < 500 ? '#4CAF50' : stats.avgResponseTime < 1000 ? '#FF9800' : '#F44336',
+            icon: '⚡'
+          },
+          {
+            title: '監控覆蓋率',
+            value: stats.count || '0',
+            subtitle: '檢查次數',
+            color: '#2196F3',
+            icon: '🔍'
+          }
+        ];
+        
+        kpiCards.forEach((kpi, index) => {
+          const cardX = 50 + (index * 170);
+          const cardWidth = 160;
+          const cardHeight = 100;
+          
+          // 卡片背景
+          doc.roundedRect(cardX, kpiY, cardWidth, cardHeight, 8)
+             .lineWidth(2)
+             .strokeColor(kpi.color)
+             .fillAndStroke('#FFFFFF', kpi.color);
+          
+          // 圖標和標題
+          doc.fontSize(20).fillColor(kpi.color)
+             .text(kpi.icon, cardX + 10, kpiY + 10);
+          
+          doc.fontSize(11).fillColor('#666')
+             .text(kpi.title, cardX + 40, kpiY + 15);
+          
+          // 主要數值
+          doc.fontSize(28).fillColor(kpi.color)
+             .font('NotoSansTC')
+             .text(kpi.value, cardX, kpiY + 40, { width: cardWidth, align: 'center' });
+          
+          // 副標題
+          doc.fontSize(10).fillColor('#888')
+             .text(kpi.subtitle, cardX, kpiY + 75, { width: cardWidth, align: 'center' });
+        });
+        
+        // 問題與建議區塊
+        const issueY = 420;
+        doc.fontSize(16).fillColor('#333')
+           .font('NotoSansTC')
+           .text('監控洞察', 50, issueY);
+        
+        // 洞察框
+        doc.roundedRect(50, issueY + 30, 500, 120, 5)
+           .fillAndStroke('#F8F9FA', '#E0E0E0');
+        
+        // 生成智能洞察
+        const insights = [];
+        const failureCount = calculateFailureCount(metrics);
+        
+        if (stats.uptime < 99.9) {
+          insights.push(`• 可用性 ${stats.uptime}% 低於 99.9% SLA 標準，建議檢查系統穩定性`);
+        }
+        if (stats.avgResponseTime > 1000) {
+          insights.push(`• 平均回應時間 ${formatResponseTime(stats.avgResponseTime)} 偏高，建議優化性能`);
+        }
+        if (stats.maxResponseTime > 5000) {
+          insights.push(`• 最大回應時間達 ${formatResponseTime(stats.maxResponseTime)}，可能存在性能瓶頸`);
+        }
+        if (failureCount > 0) {
+          insights.push(`• 記錄到 ${failureCount} 次服務中斷，需要關注系統穩定性`);
+        }
+        
+        if (insights.length === 0) {
+          insights.push('✅ 系統運行狀態良好，所有指標均在正常範圍內');
+          insights.push('✅ 建議持續監控並保持當前運維水準');
+        }
+        
+        doc.fontSize(11).fillColor('#333');
+        let insightY = issueY + 45;
+        insights.forEach(insight => {
+          doc.text(insight, 70, insightY);
+          insightY += 20;
+        });
+        
+        // 頁尾資訊
+        doc.fontSize(8).fillColor('#999')
+           .text(`報表生成時間：${currentTime}`, 50, 720)
+           .text('第 1 頁，共 2 頁', 500, 720, { width: 50, align: 'right' });
+        
+        // ========== 第2頁：性能分析 ==========
+        doc.addPage();
+        
+        // 頁首
+        doc.rect(0, 0, doc.page.width, 3).fill('#1976D2');
+        
+        doc.fontSize(10).fillColor('#666')
+           .text('網站監控系統', 50, 30)
+           .text('性能分析', 450, 30, { width: 100, align: 'right' });
+        
+        // 頁面標題
+        doc.fontSize(20).fillColor('#333')
+           .font('NotoSansTC')
+           .text('性能趨勢分析', 50, 60);
+        
+        // 分隔線
+        doc.moveTo(50, 90)
+           .lineTo(550, 90)
+           .strokeColor('#E0E0E0')
+           .lineWidth(0.5)
+           .stroke();
+        
+        // 回應時間趨勢圖表
+        if (metrics && metrics.length > 0) {
+          doc.fontSize(14).fillColor('#333')
+             .font('NotoSansTC')
+             .text('24小時回應時間趨勢', 50, 110);
+          
+          drawEnhancedResponseChart(doc, metrics, 50, 150, timeRange);
+          
+          // 圖表說明
+          doc.fontSize(10).fillColor('#666')
+             .text('* 圖表顯示過去24小時的回應時間變化趨勢', 50, 380);
+        }
+        
+        // 性能指標詳情
+        const metricsDetailY = 410;
+        doc.fontSize(14).fillColor('#333')
+           .font('NotoSansTC')
+           .text('詳細性能指標', 50, metricsDetailY);
+        
+        // 創建性能指標表格
+        const perfData = [
+          { label: '最快回應時間', value: formatResponseTime(stats.minResponseTime), status: '最佳' },
+          { label: '平均回應時間', value: formatResponseTime(stats.avgResponseTime), status: '典型' },
+          { label: '最慢回應時間', value: formatResponseTime(stats.maxResponseTime), status: '最差' },
+          { label: '成功率', value: `${((stats.successfulChecks/stats.count)*100).toFixed(2)}%`, status: stats.successfulChecks/stats.count > 0.999 ? '優秀' : '需改善' },
+          { label: '故障次數', value: `${calculateFailureCount(metrics)} 次`, status: calculateFailureCount(metrics) === 0 ? '無故障' : '需關注' },
+          { label: '連續運行時間', value: calculateContinuousUptime(metrics), status: '當前' }
+        ];
+        
+        // 表格背景
+        doc.roundedRect(50, metricsDetailY + 30, 500, 180, 5)
+           .fillAndStroke('#FAFAFA', '#E0E0E0');
+        
+        // 表格內容
+        doc.fontSize(11);
+        perfData.forEach((item, index) => {
+          const rowY = metricsDetailY + 50 + (index * 25);
+          
+          // 標籤
+          doc.fillColor('#666')
+             .text(item.label, 70, rowY, { width: 150 });
+          
+          // 數值
+          doc.fillColor('#333')
+             .font('NotoSansTC')
+             .text(item.value, 250, rowY, { width: 150, align: 'center' });
+          
+          // 狀態
+          const statusColor = item.status === '優秀' || item.status === '無故障' ? '#4CAF50' :
+                             item.status === '需改善' || item.status === '需關注' ? '#FF9800' : '#666';
+          doc.fillColor(statusColor)
+             .text(item.status, 430, rowY, { width: 100, align: 'center' });
+          
+          // 分隔線
+          if (index < perfData.length - 1) {
+            doc.moveTo(70, rowY + 18)
+               .lineTo(530, rowY + 18)
+               .strokeColor('#E8E8E8')
+               .lineWidth(0.5)
+               .stroke();
+          }
+        });
+      }
+      
+      // 總結區塊
+      const conclusionY = 640;
+      doc.fontSize(12).fillColor('#333')
+         .font('NotoSansTC')
+         .text('總結', 50, conclusionY);
+      
+      // 生成總結文字
+      let conclusion = '';
+      if (stats.uptime >= 99.9 && stats.avgResponseTime < 500) {
+        conclusion = '系統整體表現優秀，建議保持當前運維策略。';
+      } else if (stats.uptime >= 99) {
+        conclusion = '系統運行穩定，部分指標可進一步優化。';
+      } else {
+        conclusion = '系統穩定性需要改善，建議制定優化計劃。';
+      }
+      
+      doc.fontSize(11).fillColor('#666')
+         .text(conclusion, 50, conclusionY + 20, { width: 500 });
+      
+      // 頁尾
+      doc.fontSize(8).fillColor('#999')
+         .text(`報表生成時間：${currentTime}`, 50, 720)
+         .text('第 2 頁，共 2 頁', 500, 720, { width: 50, align: 'right' });
+      
+      // 底部裝飾線
+      doc.rect(0, doc.page.height - 3, doc.page.width, 3).fill('#1976D2');
+      
+      doc.end();
+    } catch (error) {
+      reject(error);
+    }
+  });
+}
+
+// CSV生成函數
+function generateWebsiteCSV(website, metrics, timeRange) {
+  let csv = '';
+  
+  // 標題
+  csv += `${website.name} - 監控數據報表\n`;
+  csv += `時間範圍: ${getTimeRangeText(timeRange)}\n`;
+  csv += `生成時間: ${moment().utc().utcOffset(8).format('YYYY-MM-DD HH:mm:ss')}\n\n`;
+  
+  // 網站資訊
+  csv += '網站資訊\n';
+  csv += `名稱,${website.name}\n`;
+  csv += `URL,${website.url}\n`;
+  csv += `狀態,${getStatusText(website.status)}\n`;
+  csv += `監控間隔,${website.interval}秒\n\n`;
+  
+  // 監控數據表頭
+  csv += '監控數據\n';
+  csv += '時間,回應時間(ms),狀態碼,DNS時間(ms),連接時間(ms),SSL時間(ms),TTFB(ms),下載時間(ms),健康狀態\n';
+  
+  // 監控數據內容
+  metrics.forEach(metric => {
+    const time = moment(metric.time).utc().utcOffset(8).format('YYYY-MM-DD HH:mm:ss');
+    const health = metric.isHealthy ? '正常' : '異常';
+    csv += `${time},${metric.responseTime},${metric.statusCode},`;
+    csv += `${metric.dnsTime || 0},${metric.connectTime || 0},`;
+    csv += `${metric.sslHandshakeTime || 0},${metric.timeToFirstByte || 0},`;
+    csv += `${metric.downloadTime || 0},${health}\n`;
+  });
+  
+  return csv;
+}
+
+// 輔助函數
+function getTimeRangeText(timeRange) {
+  const ranges = {
+    '1h': '過去1小時',
+    '3h': '過去3小時',
+    '6h': '過去6小時',
+    '12h': '過去12小時',
+    '24h': '過去24小時',
+    '2d': '過去2天',
+    '7d': '過去7天',
+    '14d': '過去14天',
+    '30d': '過去30天',
+    '90d': '過去90天'
+  };
+  return ranges[timeRange] || timeRange;
+}
+
+function getStatusText(status) {
+  const statusMap = {
+    'healthy': '正常',
+    'unhealthy': '異常',
+    'pending': '待檢查'
+  };
+  return statusMap[status] || status;
+}
+
+// 智能單位換算函數
+function formatResponseTime(ms) {
+  if (ms === null || ms === undefined || isNaN(ms)) return 'N/A';
+  
+  if (ms < 1000) {
+    return `${Math.round(ms)}ms`;
+  } else if (ms < 60000) { // 小於1分鐘
+    return `${(ms / 1000).toFixed(1)}s`;
+  } else { // 大於1分鐘
+    const minutes = Math.floor(ms / 60000);
+    const seconds = Math.round((ms % 60000) / 1000);
+    return seconds > 0 ? `${minutes}m${seconds}s` : `${minutes}m`;
+  }
+}
+
+function formatBytes(bytes) {
+  if (bytes === null || bytes === undefined || isNaN(bytes)) return 'N/A';
+  
+  if (bytes === 0) return '0 B';
+  
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  
+  return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`;
+}
+
+function formatNumber(num) {
+  if (num === null || num === undefined || isNaN(num)) return 'N/A';
+  
+  if (num < 1000) return num.toString();
+  if (num < 1000000) return `${(num / 1000).toFixed(1)}K`;
+  if (num < 1000000000) return `${(num / 1000000).toFixed(1)}M`;
+  return `${(num / 1000000000).toFixed(1)}G`;
+}
+
+// 千分位分隔符格式化
+function formatNumberWithCommas(num) {
+  if (num === null || num === undefined || isNaN(num)) return 'N/A';
+  return num.toLocaleString('zh-TW');
+}
+
+// 將時間範圍轉換為毫秒
+function getTimeRangeInMs(timeRange) {
+  const ranges = {
+    '1h': 60 * 60 * 1000,
+    '3h': 3 * 60 * 60 * 1000,
+    '6h': 6 * 60 * 60 * 1000,
+    '12h': 12 * 60 * 60 * 1000,
+    '24h': 24 * 60 * 60 * 1000,
+    '2d': 2 * 24 * 60 * 60 * 1000,
+    '7d': 7 * 24 * 60 * 60 * 1000,
+    '14d': 14 * 24 * 60 * 60 * 1000,
+    '30d': 30 * 24 * 60 * 60 * 1000,
+    '90d': 90 * 24 * 60 * 60 * 1000
+  };
+  return ranges[timeRange] || ranges['24h'];
+}
+
+// 執行摘要頁面（高層用）
+function generateExecutiveSummaryPage(doc, website, stats, timeRange) {
+  const timeRangeText = getTimeRangeText(timeRange);
+  const currentTime = moment().utc().utcOffset(8).format('YYYY-MM-DD HH:mm:ss');
+  
+  // 頁首裝飾線
+  doc.rect(0, 0, doc.page.width, 5).fill('#1976D2');
+  
+  // 標題區塊
+  doc.moveDown(2);
+  doc.fontSize(28).fillColor('#1976D2')
+     .font('NotoSansTC')
+     .text(`${website.name}`, { align: 'center' });
+  doc.fontSize(16).fillColor('#666')
+     .text('執行摘要報表', { align: 'center' });
+  doc.fontSize(12).fillColor('#888')
+     .text(`${timeRangeText}`, { align: 'center' });
+  
+  doc.moveDown(1.5);
+  
+  // 關鍵指標儀表板（大號顯示）
+  doc.fontSize(18).fillColor('#1976D2')
+     .text('關鍵效能指標', 50, doc.y, { align: 'left' });
+  
+  const dashboardY = doc.y + 20;
+  const cardWidth = 110;
+  const cardHeight = 90;
+  const cardSpacing = 15;
+  
+  // KPI 卡片數據
+  const kpiData = [
+    { 
+      label: '服務可用性', 
+      value: `${stats.uptime}%`, 
+      color: stats.uptime >= 99 ? '#4CAF50' : stats.uptime >= 95 ? '#FF9800' : '#F44336',
+      status: stats.uptime >= 99 ? '優秀' : stats.uptime >= 95 ? '良好' : '待改進'
+    },
+    { 
+      label: '平均回應', 
+      value: formatResponseTime(stats.avgResponseTime), 
+      color: stats.avgResponseTime < 500 ? '#4CAF50' : stats.avgResponseTime < 1000 ? '#FF9800' : '#F44336',
+      status: stats.avgResponseTime < 500 ? '快速' : stats.avgResponseTime < 1000 ? '正常' : '較慢'
+    },
+    { 
+      label: '檢查次數', 
+      value: formatNumber(stats.count), 
+      color: '#2196F3',
+      status: '正常'
+    },
+    { 
+      label: '事件數量', 
+      value: stats.incidents || 0, 
+      color: (stats.incidents || 0) === 0 ? '#4CAF50' : '#F44336',
+      status: (stats.incidents || 0) === 0 ? '穩定' : '需關注'
+    }
+  ];
+  
+  kpiData.forEach((kpi, index) => {
+    const x = 50 + (index * (cardWidth + cardSpacing));
+    
+    // 卡片背景
+    doc.roundedRect(x, dashboardY, cardWidth, cardHeight, 8)
+       .fillColor('#FFFFFF')
+       .fill()
+       .strokeColor('#E0E0E0')
+       .lineWidth(1)
+       .stroke();
+    
+    // 狀態指示器
+    doc.circle(x + cardWidth - 15, dashboardY + 15, 6)
+       .fillColor(kpi.color)
+       .fill();
+    
+    // 數值（大字體）
+    doc.fontSize(24)
+       .fillColor(kpi.color)
+       .font('NotoSansTC')
+       .text(String(kpi.value), x + 10, dashboardY + 20, { 
+         width: cardWidth - 20, 
+         align: 'center' 
+       });
+    
+    // 標籤
+    doc.fontSize(10)
+       .fillColor('#666')
+       .text(kpi.label, x + 10, dashboardY + 50, { 
+         width: cardWidth - 20, 
+         align: 'center' 
+       });
+    
+    // 狀態文字
+    doc.fontSize(8)
+       .fillColor('#888')
+       .text(kpi.status, x + 10, dashboardY + 65, { 
+         width: cardWidth - 20, 
+         align: 'center' 
+       });
+  });
+  
+  doc.y = dashboardY + cardHeight + 30;
+  
+  // 趨勢圖表區域（簡化版）
+  doc.fontSize(18).fillColor('#1976D2')
+     .text('服務趨勢', 50, doc.y, { align: 'left' });
+  
+  // 可用性甜甜圈圖（大版）
+  drawModernUptimeChart(doc, stats.uptime, 150, doc.y + 30);
+  
+  doc.y = doc.y + 200;
+  
+  // 執行建議
+  doc.fontSize(18).fillColor('#1976D2')
+     .text('執行建議', 50, doc.y, { align: 'left' });
+  
+  const recommendationY = doc.y + 20;
+  doc.roundedRect(50, recommendationY, 500, 80, 5)
+     .fillColor('#F8F9FA')
+     .fill()
+     .strokeColor('#E0E0E0')
+     .stroke();
+  
+  doc.fontSize(11)
+     .fillColor('#333')
+     .text(getExecutiveRecommendations(stats), 65, recommendationY + 15, { 
+       width: 470, 
+       align: 'left' 
+     });
+}
+
+// 生成執行建議
+function getExecutiveRecommendations(stats) {
+  const recommendations = [];
+  
+  if (stats.uptime < 99) {
+    recommendations.push('• 服務可用性低於業界標準，建議檢查基礎設施穩定性');
+  }
+  if (stats.avgResponseTime > 1000) {
+    recommendations.push('• 回應時間較慢，建議優化伺服器效能或增加資源');
+  }
+  if (stats.uptime >= 99.5 && stats.avgResponseTime < 500) {
+    recommendations.push('• 服務表現優秀，建議維持當前運營策略');
+  }
+  if ((stats.incidents || 0) > 0) {
+    recommendations.push('• 發現服務事件，建議檢查監控日誌並制定預防措施');
+  }
+  
+  if (recommendations.length === 0) {
+    recommendations.push('• 服務運行良好，建議持續監控關鍵指標');
+  }
+  
+  return recommendations.join('\n');
+}
+
+// 技術詳細頁面（工程師用）
+function generateTechnicalDetailsPages(doc, website, stats, metrics, timeRange) {
+  // 新頁面
+  doc.addPage();
+  
+  // 技術報表標題
+  doc.fontSize(20).fillColor('#1976D2')
+     .font('NotoSansTC')
+     .text('技術詳細報表', 50, 50, { align: 'left' });
+  
+  doc.fontSize(12).fillColor('#666')
+     .text('工程團隊專用技術數據', 50, doc.y + 5, { align: 'left' });
+  
+  doc.y = doc.y + 30;
+  
+  // 詳細統計表格
+  generateDetailedStatsSection(doc, stats);
+  
+  // 回應時間趨勢圖表移到新的一頁
+  if (metrics && metrics.length > 0) {
+    doc.addPage(); // 新增一頁
+    
+    // 移除「回應時間組成分析 (ms)」標題，直接繪製圖表
+    drawEnhancedResponseChart(doc, metrics, 50, 50, timeRange);
+    doc.y = 280; // 設定頁面底部位置
+  }
+  
+  // 監控數據表格
+  generateMonitoringDataTable(doc, metrics);
+}
+
+// 詳細統計區段
+function generateDetailedStatsSection(doc, stats) {
+  doc.fontSize(16).fillColor('#1976D2')
+     .text('詳細統計數據', 50, doc.y, { align: 'left' });
+  
+  const statsY = doc.y + 20;
+  
+  // 統計背景
+  doc.rect(50, statsY, 500, 120)
+     .fillColor('#FAFAFA')
+     .fill()
+     .strokeColor('#E0E0E0')
+     .stroke();
+  
+  // 統計項目（三欄佈局）
+  doc.fillColor('#333').fontSize(10);
+  
+  const col1 = 65, col2 = 230, col3 = 395;
+  let rowY = statsY + 20;
+  
+  // 第一行
+  doc.text(`檢查總數: ${formatNumberWithCommas(stats.count)}`, col1, rowY);
+  doc.text(`成功檢查: ${formatNumberWithCommas(stats.successfulChecks)}`, col2, rowY);
+  doc.text(`失敗檢查: ${formatNumberWithCommas(stats.count - stats.successfulChecks)}`, col3, rowY);
+  
+  rowY += 25;
+  doc.text(`最快回應: ${formatResponseTime(stats.minResponseTime)}`, col1, rowY);
+  doc.text(`最慢回應: ${formatResponseTime(stats.maxResponseTime)}`, col2, rowY);
+  doc.text(`回應中位數: ${formatResponseTime(stats.medianResponseTime || stats.avgResponseTime)}`, col3, rowY);
+  
+  rowY += 25;
+  doc.text(`可用性: ${stats.uptime}%`, col1, rowY);
+  doc.text(`停機時間: ${stats.downtime}`, col2, rowY);
+  doc.text(`成功率: ${((stats.successfulChecks/stats.count)*100).toFixed(2)}%`, col3, rowY);
+  
+  doc.y = statsY + 140;
+}
+
+// 監控數據表格
+function generateMonitoringDataTable(doc, metrics) {
+  if (!metrics || metrics.length === 0) return;
+  
+  doc.fontSize(16).fillColor('#1976D2')
+     .text('近期監控記錄', 50, doc.y, { align: 'left' });
+  
+  const tableY = doc.y + 20;
+  const displayMetrics = metrics.slice(-15); // 顯示最近15筆
+  const rowHeight = 18;
+  const tableHeight = (displayMetrics.length + 1) * rowHeight;
+  
+  // 表格背景
+  doc.rect(50, tableY, 500, tableHeight)
+     .fillColor('#FFFFFF')
+     .fill()
+     .strokeColor('#CCCCCC')
+     .stroke();
+  
+  // 表頭
+  const headerY = tableY + 5;
+  doc.rect(50, headerY, 500, rowHeight - 2)
+     .fillColor('#1976D2')
+     .fill();
+  
+  doc.fillColor('#FFFFFF').fontSize(9).font('NotoSansTC');
+  doc.text('檢查時間', 60, headerY + 6);
+  doc.text('回應時間', 160, headerY + 6);
+  doc.text('狀態碼', 240, headerY + 6);
+  doc.text('DNS', 300, headerY + 6);
+  doc.text('連接', 340, headerY + 6);
+  doc.text('SSL', 380, headerY + 6);
+  doc.text('TTFB', 420, headerY + 6);
+  doc.text('狀態', 480, headerY + 6);
+  
+  // 數據行
+  displayMetrics.forEach((metric, index) => {
+    const rowY = headerY + (index + 1) * rowHeight + 6;
+    const bgColor = index % 2 === 0 ? '#F9F9F9' : '#FFFFFF';
+    
+    // 行背景
+    doc.rect(50, rowY - 3, 500, rowHeight - 2)
+       .fillColor(bgColor)
+       .fill();
+    
+    // 時間
+    const timeStr = moment(metric.timestamp).utc().utcOffset(8).format('MM/DD HH:mm');
+    doc.fillColor('#333').fontSize(8)
+       .text(timeStr, 60, rowY);
+    
+    // 回應時間（著色）
+    const rtColor = metric.responseTime < 500 ? '#4CAF50' : 
+                    metric.responseTime < 1000 ? '#FF9800' : '#F44336';
+    doc.fillColor(rtColor)
+       .text(formatResponseTime(metric.responseTime), 160, rowY);
+    
+    // 狀態碼
+    const statusColor = metric.statusCode >= 200 && metric.statusCode < 300 ? '#4CAF50' : '#F44336';
+    doc.fillColor(statusColor)
+       .text(String(metric.statusCode), 240, rowY);
+    
+    // 其他技術指標
+    doc.fillColor('#666').fontSize(7);
+    doc.text(metric.dnsTime ? `${metric.dnsTime}ms` : '-', 300, rowY);
+    doc.text(metric.connectTime ? `${metric.connectTime}ms` : '-', 340, rowY);
+    doc.text(metric.sslTime ? `${metric.sslTime}ms` : '-', 380, rowY);
+    doc.text(metric.ttfbTime ? `${metric.ttfbTime}ms` : '-', 420, rowY);
+    
+    // 健康狀態
+    const healthIcon = metric.statusCode >= 200 && metric.statusCode < 300 ? '✓' : '✗';
+    const healthColor = metric.statusCode >= 200 && metric.statusCode < 300 ? '#4CAF50' : '#F44336';
+    doc.fillColor(healthColor).fontSize(8)
+       .text(healthIcon, 490, rowY);
+  });
+  
+  doc.y = tableY + tableHeight + 20;
+}
+
+// 分層式 PDF 生成函數（新版本）
+async function generateLayeredWebsitePDF(website, stats, metrics, timeRange) {
+  return new Promise((resolve, reject) => {
+    try {
+      const doc = new PDFDocument({ 
+        margin: 50,
+        lineGap: 3,  // 增加行間距
+        wordSpacing: 1.2,  // 增加字間距
+        characterSpacing: 0.8,  // 增加字元間距
+        info: {
+          Title: `${website.name} 分層監控報表`,
+          Author: 'Website Monitor System v3.2.0',
+          Subject: '分層式網站監控數據報表（執行摘要 + 技術詳情）'
+        }
+      });
+      const chunks = [];
+      
+      doc.on('data', (chunk) => chunks.push(chunk));
+      doc.on('end', () => resolve(Buffer.concat(chunks)));
+      
+      // 註冊中文字體
+      const fontPath = '/app/fonts/NotoSansTC.ttf';
+      if (fs.existsSync(fontPath)) {
+        console.log('使用 Noto Sans TC 中文字體');
+        doc.registerFont('NotoSansTC', fontPath);
+        doc.font('NotoSansTC');
+      } else {
+        console.log('找不到中文字體檔案，使用預設字體');
+      }
+      
+      // 第一頁：執行摘要（高層主管用）
+      generateExecutiveSummaryPage(doc, website, stats, timeRange);
+      
+      // 已整合到第1頁和第2頁，不需要額外的技術頁面
+      
+      // 全域頁尾
+      const currentTime = moment().utc().utcOffset(8).format('YYYY-MM-DD HH:mm:ss');
+      try {
+        const pages = doc.bufferedPageRange();
+        for (let i = 0; i < pages.count; i++) {
+          doc.switchToPage(i);
+          
+          // 頁面類型標識
+          const pageType = i === 0 ? '執行摘要' : '技術報表';
+          const audienceType = i === 0 ? '主管層' : '工程師';
+          
+          // 左側：報表類型
+          doc.fontSize(8)
+             .fillColor('#666')
+             .text(`${pageType} (${audienceType}) | 網站監控系統 v3.2.0`, 50, doc.page.height - 30, { 
+               align: 'left' 
+             });
+          
+          // 右側：頁碼和時間
+          doc.text(`第 ${i + 1} 頁 | ${currentTime}`, 0, doc.page.height - 30, { 
+            align: 'right' 
+          });
+        }
+      } catch (footerError) {
+        console.log('頁尾生成略過:', footerError.message);
+      }
+      
+      doc.end();
+      
+    } catch (error) {
+      console.error('PDF 生成錯誤:', error);
+      reject(error);
+    }
+  });
+}
+
+// 性能趨勢分析儀表板 - 顯示不同維度的指標
+function drawTrendGauges(doc, stats, metrics, startX, startY) {
+  const gaugeSize = 60;
+  const spacing = 170;
+  
+  // 計算趨勢和健康度指標
+  const performanceScore = calculatePerformanceScore(stats, metrics);
+  const stabilityIndex = calculateStabilityIndex(metrics);
+  const responseHealth = calculateResponseHealth(stats);
+  
+  // 三個不同維度的指標
+  const gauges = [
+    {
+      title: '性能評分',
+      value: performanceScore,
+      max: 100,
+      unit: '分',
+      color: '#9C27B0',
+      x: startX + 70,
+      threshold: { good: 85, warning: 70 }
+    },
+    {
+      title: '穩定性指數',
+      value: stabilityIndex,
+      max: 100,
+      unit: '%', 
+      color: '#607D8B',
+      x: startX + 70 + spacing,
+      threshold: { good: 90, warning: 75 }
+    },
+    {
+      title: '回應健康度',
+      value: responseHealth,
+      max: 100,
+      unit: '%',
+      color: '#795548',
+      x: startX + 70 + spacing * 2,
+      threshold: { good: 80, warning: 60 }
+    }
+  ];
+  
+  gauges.forEach(gauge => {
+    drawSemiCircleGauge(doc, gauge.x, startY + 40, gaugeSize, gauge.value, gauge.max, gauge.color, gauge.title, gauge.unit, gauge.threshold);
+  });
+}
+
+// 計算性能綜合評分
+function calculatePerformanceScore(stats, metrics) {
+  if (!stats) return 0;
+  
+  // 基於可用性、回應時間和成功率的綜合評分
+  const uptimeScore = Math.min(stats.uptime || 0, 100);
+  const responseScore = Math.max(0, 100 - (stats.avgResponseTime || 1000) / 10); // 1秒=90分
+  const successScore = ((stats.successfulChecks || 0) / Math.max(stats.count || 1, 1)) * 100;
+  
+  return Math.round((uptimeScore * 0.4 + responseScore * 0.3 + successScore * 0.3));
+}
+
+// 計算穩定性指數（基於回應時間的變異程度）
+function calculateStabilityIndex(metrics) {
+  if (!metrics || metrics.length < 5) return 0;
+  
+  const responseTimes = metrics
+    .filter(m => m.responseTime && m.responseTime > 0)
+    .map(m => m.responseTime)
+    .slice(-20); // 取最近20個數據點
+  
+  if (responseTimes.length < 5) return 0;
+  
+  const mean = responseTimes.reduce((a, b) => a + b, 0) / responseTimes.length;
+  const variance = responseTimes.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / responseTimes.length;
+  const stdDev = Math.sqrt(variance);
+  
+  // 變異係數越小，穩定性越高
+  const coefficientOfVariation = stdDev / mean;
+  const stabilityIndex = Math.max(0, 100 - (coefficientOfVariation * 100));
+  
+  return Math.round(stabilityIndex);
+}
+
+// 計算回應健康度（基於最近的性能表現）
+function calculateResponseHealth(stats) {
+  if (!stats) return 0;
+  
+  const avgResponse = stats.avgResponseTime || 1000;
+  const minResponse = stats.minResponseTime || avgResponse;
+  const maxResponse = stats.maxResponseTime || avgResponse;
+  
+  // 基於平均回應時間和變化範圍
+  const responseRatio = minResponse / Math.max(maxResponse, 1);
+  const avgHealth = Math.max(0, 100 - avgResponse / 20); // 2秒=0分
+  const consistencyBonus = responseRatio * 20; // 一致性獎勵
+  
+  return Math.min(100, Math.round(avgHealth + consistencyBonus));
+}
+
+// 原儀表板函數（保留備用）
+function drawDashboardGauges(doc, stats, startX, startY) {
+  const gaugeSize = 60;  // 縮小儀表盤尺寸以避免重疊
+  const spacing = 170;   // 增加間距以確保不重疊
+  
+  // 三個核心指標儀表
+  const gauges = [
+    {
+      title: '可用性',
+      value: stats.uptime,
+      max: 100,
+      unit: '%',
+      color: '#4CAF50',
+      x: startX + 70,
+      threshold: { good: 99, warning: 95 }
+    },
+    {
+      title: '平均回應',
+      value: stats.avgResponseTime,
+      max: 2000,
+      unit: 'ms', 
+      color: '#2196F3',
+      x: startX + 70 + spacing,
+      threshold: { good: 200, warning: 500 }
+    },
+    {
+      title: '成功率',
+      value: (stats.successfulChecks/stats.count)*100,
+      max: 100,
+      unit: '%',
+      color: '#FF9800',
+      x: startX + 70 + spacing * 2,
+      threshold: { good: 98, warning: 90 }
+    }
+  ];
+  
+  gauges.forEach(gauge => {
+    drawSemiCircleGauge(doc, gauge.x, startY + 40, gaugeSize, gauge.value, gauge.max, gauge.color, gauge.title, gauge.unit, gauge.threshold);
+  });
+}
+
+// 半圓形儀表盤
+function drawSemiCircleGauge(doc, centerX, centerY, radius, value, maxValue, color, title, unit, threshold) {
+  const percentage = Math.min(value / maxValue, 1);
+  const angle = Math.PI * percentage; // 半圓範圍
+  
+  doc.save();
+  
+  // 背景弧線
+  doc.strokeColor('#E0E0E0').lineWidth(8);
+  doc.arc(centerX, centerY, radius, Math.PI, 0, false).stroke();
+  
+  // 數值弧線 - 根據閾值設定顏色
+  let gaugeColor = color;
+  if (unit === '%') {
+    if (value >= threshold.good) gaugeColor = '#4CAF50';
+    else if (value >= threshold.warning) gaugeColor = '#FF9800';
+    else gaugeColor = '#F44336';
+  } else {
+    if (value <= threshold.good) gaugeColor = '#4CAF50';
+    else if (value <= threshold.warning) gaugeColor = '#FF9800';
+    else gaugeColor = '#F44336';
+  }
+  
+  doc.strokeColor(gaugeColor).lineWidth(8);
+  doc.arc(centerX, centerY, radius, Math.PI, Math.PI + angle, false).stroke();
+  
+  // 中心數值
+  doc.fillColor('#333').fontSize(18).font('NotoSansTC');
+  const displayValue = unit === 'ms' ? Math.round(value) : value.toFixed(1);
+  const textWidth = doc.widthOfString(displayValue + unit);
+  doc.text(displayValue + unit, centerX - textWidth/2, centerY - 5);
+  
+  // 標題
+  doc.fillColor('#666').fontSize(12);
+  const titleWidth = doc.widthOfString(title);
+  doc.text(title, centerX - titleWidth/2, centerY + 25);
+  
+  // 刻度標記
+  doc.strokeColor('#CCC').lineWidth(1);
+  for (let i = 0; i <= 4; i++) {
+    const tickAngle = Math.PI + (Math.PI * i / 4);
+    const innerRadius = radius - 5;
+    const outerRadius = radius + 5;
+    
+    const x1 = centerX + Math.cos(tickAngle) * innerRadius;
+    const y1 = centerY + Math.sin(tickAngle) * innerRadius;
+    const x2 = centerX + Math.cos(tickAngle) * outerRadius;
+    const y2 = centerY + Math.sin(tickAngle) * outerRadius;
+    
+    doc.moveTo(x1, y1).lineTo(x2, y2).stroke();
+  }
+  
+  doc.restore();
+}
+
+// 月度可用性日曆視圖
+function drawMonthlyAvailabilityCalendar(doc, metrics, startX, startY, timeRange) {
+  const now = moment();
+  const currentMonth = now.clone().startOf('month');
+  const daysInMonth = currentMonth.daysInMonth();
+  const firstDayOfWeek = currentMonth.day(); // 0=Sunday, 1=Monday, etc.
+  
+  const cellSize = 60;
+  const cellSpacing = 5;
+  const calendarWidth = 7 * (cellSize + cellSpacing) - cellSpacing;
+  
+  // 日曆標題
+  doc.fontSize(16).fillColor('#333').font('NotoSansTC');
+  const monthTitle = now.format('YYYY年MM月') + ' 可用性概覽';
+  doc.text(monthTitle, startX + calendarWidth/2 - doc.widthOfString(monthTitle)/2, startY);
+  
+  // 星期標題
+  const weekDays = ['日', '一', '二', '三', '四', '五', '六'];
+  doc.fontSize(12).fillColor('#666');
+  weekDays.forEach((day, index) => {
+    const x = startX + index * (cellSize + cellSpacing) + cellSize/2;
+    doc.text(day, x - doc.widthOfString(day)/2, startY + 30);
+  });
+  
+  // 處理監控數據，計算每日可用性
+  const dailyStats = {};
+  
+  // 初始化所有日期
+  for (let day = 1; day <= daysInMonth; day++) {
+    const dateKey = currentMonth.clone().date(day).format('YYYY-MM-DD');
+    dailyStats[dateKey] = { 
+      total: 0, 
+      successful: 0, 
+      uptime: 0,
+      hasData: false 
+    };
+  }
+  
+  // 處理監控數據
+  if (metrics && metrics.length > 0) {
+    metrics.forEach(metric => {
+      const timestamp = moment(metric.timestamp || metric.time);
+      if (timestamp.isValid() && timestamp.month() === now.month()) {
+        const dateKey = timestamp.format('YYYY-MM-DD');
+        if (dailyStats[dateKey]) {
+          dailyStats[dateKey].total++;
+          dailyStats[dateKey].hasData = true;
+          if (metric.status === 'healthy' || metric.isHealthy !== false) {
+            dailyStats[dateKey].successful++;
+          }
+        }
+      }
+    });
+    
+    // 計算每日可用性
+    Object.keys(dailyStats).forEach(dateKey => {
+      const stats = dailyStats[dateKey];
+      if (stats.total > 0) {
+        stats.uptime = (stats.successful / stats.total) * 100;
+      } else if (!stats.hasData) {
+        stats.uptime = null; // 無數據
+      }
+    });
+  }
+  
+  // 繪製日曆格子
+  let currentRow = 0;
+  let currentCol = firstDayOfWeek;
+  
+  for (let day = 1; day <= daysInMonth; day++) {
+    const x = startX + currentCol * (cellSize + cellSpacing);
+    const y = startY + 60 + currentRow * (cellSize + cellSpacing);
+    
+    const dateKey = currentMonth.clone().date(day).format('YYYY-MM-DD');
+    const dayStats = dailyStats[dateKey];
+    
+    // 決定格子顏色
+    let cellColor = '#F5F5F5'; // 無數據 - 灰色
+    let textColor = '#999';
+    
+    if (dayStats.hasData) {
+      if (dayStats.uptime === null) {
+        cellColor = '#F5F5F5'; // 無數據
+        textColor = '#999';
+      } else if (dayStats.uptime >= 99) {
+        cellColor = '#4CAF50'; // 優秀 - 綠色
+        textColor = '#FFF';
+      } else if (dayStats.uptime >= 95) {
+        cellColor = '#FF9800'; // 警告 - 橙色
+        textColor = '#FFF';
+      } else {
+        cellColor = '#F44336'; // 異常 - 紅色
+        textColor = '#FFF';
+      }
+    }
+    
+    // 繪製格子
+    doc.roundedRect(x, y, cellSize, cellSize, 3)
+       .fillColor(cellColor)
+       .fill()
+       .strokeColor('#E0E0E0')
+       .lineWidth(1)
+       .stroke();
+    
+    // 日期數字
+    doc.fontSize(14).fillColor(textColor).font('NotoSansTC');
+    const dayText = day.toString();
+    const dayTextWidth = doc.widthOfString(dayText);
+    doc.text(dayText, x + cellSize/2 - dayTextWidth/2, y + 12);
+    
+    // 可用性百分比（如果有數據）
+    if (dayStats.hasData && dayStats.uptime !== null) {
+      doc.fontSize(8).fillColor(textColor);
+      const uptimeText = dayStats.uptime.toFixed(0) + '%';
+      const uptimeWidth = doc.widthOfString(uptimeText);
+      doc.text(uptimeText, x + cellSize/2 - uptimeWidth/2, y + 32);
+    }
+    
+    currentCol++;
+    if (currentCol >= 7) {
+      currentCol = 0;
+      currentRow++;
+    }
+  }
+  
+  // 圖例
+  const legendY = startY + 60 + (currentRow + 1) * (cellSize + cellSpacing) + 20;
+  const legendItems = [
+    { color: '#4CAF50', label: '優秀 (≥99%)', textColor: '#FFF' },
+    { color: '#FF9800', label: '警告 (95-99%)', textColor: '#FFF' },
+    { color: '#F44336', label: '異常 (<95%)', textColor: '#FFF' },
+    { color: '#F5F5F5', label: '無數據', textColor: '#999' }
+  ];
+  
+  doc.fontSize(10).fillColor('#666').font('NotoSansTC');
+  doc.text('圖例：', startX, legendY);
+  
+  legendItems.forEach((item, index) => {
+    const itemX = startX + 50 + index * 120;
+    
+    // 色塊
+    doc.roundedRect(itemX, legendY - 3, 15, 15, 2)
+       .fillColor(item.color)
+       .fill();
+    
+    // 標籤
+    doc.fillColor('#666').text(item.label, itemX + 20, legendY);
+  });
+}
+
+// 關鍵效能指標卡片 - 簡化版本，移除時間軸
+function drawKeyMetricsCards(doc, stats, metrics, startX, startY, timeRange) {
+  // 計算故障統計
+  const failureCount = calculateFailureCount(metrics);
+  const uptime = stats.uptime || 100;
+  const totalHours = getTimeRangeHours(timeRange);
+  const continuousUptime = calculateContinuousUptime(metrics);
+  
+  // 直接繪製三個關鍵指標卡片，更大更清晰
+  const cardWidth = 150;
+  const cardHeight = 80;
+  const cardSpacing = 10;
+  const totalWidth = (cardWidth * 3) + (cardSpacing * 2);
+  const centerX = (doc.page.width - totalWidth) / 2;
+  
+  // 卡片1：可用性
+  const card1X = centerX;
+  doc.roundedRect(card1X, startY, cardWidth, cardHeight, 5)
+     .fillAndStroke('#E8F5E9', '#4CAF50');
+  
+  doc.fontSize(12).fillColor('#4CAF50').font('NotoSansTC');
+  doc.text('可用性', card1X, startY + 10, { width: cardWidth, align: 'center' });
+  
+  doc.fontSize(32).fillColor('#2E7D32').font('NotoSansTC');
+  doc.text(`${uptime}%`, card1X, startY + 30, { width: cardWidth, align: 'center' });
+  
+  doc.fontSize(10).fillColor('#666');
+  doc.text(`過去${totalHours}小時`, card1X, startY + 62, { width: cardWidth, align: 'center' });
+  
+  // 卡片2：故障次數
+  const card2X = centerX + cardWidth + cardSpacing;
+  const cardColor = failureCount === 0 ? '#E8F5E9' : '#FFEBEE';
+  const textColor = failureCount === 0 ? '#4CAF50' : '#F44336';
+  
+  doc.roundedRect(card2X, startY, cardWidth, cardHeight, 5)
+     .fillAndStroke(cardColor, textColor);
+  
+  doc.fontSize(12).fillColor(textColor).font('NotoSansTC');
+  doc.text('故障次數', card2X, startY + 10, { width: cardWidth, align: 'center' });
+  
+  doc.fontSize(32).fillColor(textColor).font('NotoSansTC');
+  doc.text(failureCount.toString(), card2X, startY + 30, { width: cardWidth, align: 'center' });
+  
+  doc.fontSize(10).fillColor('#666');
+  doc.text(failureCount === 0 ? '系統穩定' : '需要關注', card2X, startY + 62, { width: cardWidth, align: 'center' });
+  
+  // 卡片3：連續運行
+  const card3X = centerX + (cardWidth + cardSpacing) * 2;
+  doc.roundedRect(card3X, startY, cardWidth, cardHeight, 5)
+     .fillAndStroke('#E3F2FD', '#2196F3');
+  
+  doc.fontSize(12).fillColor('#2196F3').font('NotoSansTC');
+  doc.text('連續運行', card3X, startY + 10, { width: cardWidth, align: 'center' });
+  
+  doc.fontSize(20).fillColor('#1565C0').font('NotoSansTC');
+  doc.text(continuousUptime, card3X, startY + 32, { width: cardWidth, align: 'center' });
+  
+  doc.fontSize(10).fillColor('#666');
+  doc.text('無故障時間', card3X, startY + 62, { width: cardWidth, align: 'center' });
+  
+  // 在卡片下方添加簡要說明
+  doc.moveDown(2);
+  doc.fontSize(10).fillColor('#888');
+  const summaryY = startY + cardHeight + 20;
+  
+  if (failureCount === 0 && uptime >= 99.9) {
+    doc.text('✅ 系統運行狀態優秀，無任何故障記錄', 50, summaryY, { width: 500, align: 'center' });
+  } else if (uptime >= 99) {
+    doc.text(`⚠️ 系統整體穩定，但記錄到 ${failureCount} 次短暫中斷`, 50, summaryY, { width: 500, align: 'center' });
+  } else {
+    doc.text(`❌ 系統需要優化，可用性低於預期標準`, 50, summaryY, { width: 500, align: 'center' });
+  }
+}
+
+// 保留原始函數以防其他地方調用（但已廢棄）
+function drawServiceStabilityAnalysis(doc, stats, metrics, startX, startY, timeRange) {
+  // 轉向使用新的簡化版本
+  drawKeyMetricsCards(doc, stats, metrics, startX, startY, timeRange);
+}
+
+// 原始的服務穩定性分析函數（已廢棄）
+function drawServiceStabilityAnalysis_deprecated(doc, stats, metrics, startX, startY, timeRange) {
+  const sectionWidth = 500;
+  const sectionHeight = 180;
+  
+  // 計算故障統計
+  const failureCount = calculateFailureCount(metrics);
+  const uptime = stats.uptime || 100;
+  const totalHours = getTimeRangeHours(timeRange);
+  const downtimeMinutes = Math.round((100 - uptime) * totalHours * 60 / 100);
+  const continuousUptime = calculateContinuousUptime(metrics);
+  
+  // 移除重複的標題，因為已經在主函數中設定了
+  // 直接從startY開始繪製時間軸
+  
+  // 重新設計時間軸佈局 - 使用更清晰的分離
+  const timelineY = startY + 20;  // 減少間距，因為沒有重複標題了
+  const timelineX = startX + 100;  // 調整左側空間
+  const timelineWidth = 280;      // 調整時間軸寬度
+  const timelineHeight = 25;      // 保持時間軸高度
+  
+  // 計算時間
+  const startTime = moment().subtract(totalHours, 'hours');
+  const endTime = moment();
+  
+  // 開始時間標籤 - 左側對齊
+  doc.fontSize(10).fillColor('#666').font('NotoSansTC');
+  doc.text('開始時間', startX, timelineY - 15, { width: 80, align: 'center' });
+  doc.fontSize(11).fillColor('#1976D2');
+  doc.text(startTime.format('HH:mm'), startX, timelineY + 2, { width: 80, align: 'center' });
+  
+  // 繪製時間軸背景（灰色）
+  doc.roundedRect(timelineX, timelineY, timelineWidth, timelineHeight, 4)
+     .fillColor('#E0E0E0')
+     .fill();
+  
+  // 繪製正常運行部分（綠色）
+  const uptimeWidth = (uptime / 100) * timelineWidth;
+  doc.roundedRect(timelineX, timelineY, uptimeWidth, timelineHeight, 4)
+     .fillColor('#4CAF50')
+     .fill();
+  
+  // 結束時間標籤 - 右側對齊
+  const endTimeX = timelineX + timelineWidth + 10;
+  doc.fontSize(10).fillColor('#666').font('NotoSansTC');
+  doc.text('結束時間', endTimeX, timelineY - 15, { width: 80, align: 'center' });
+  doc.fontSize(11).fillColor('#1976D2');
+  doc.text(endTime.format('HH:mm'), endTimeX, timelineY + 2, { width: 80, align: 'center' });
+  
+  // 時間軸中央標籤 - 數據
+  doc.fontSize(10).fillColor('#666').font('NotoSansTC');
+  doc.text('數據', timelineX + timelineWidth / 2 - 40, timelineY - 15, { width: 80, align: 'center' });
+  doc.fontSize(13).fillColor('#4CAF50').font('NotoSansTC');
+  doc.text(`${uptime}% 正常運行`, timelineX + timelineWidth / 2 - 40, timelineY + 2, { width: 80, align: 'center' });
+  
+  // 狀態描述（左下角）
+  doc.fontSize(10).fillColor('#666');
+  const statusText = failureCount === 0 ? '✅ 無中斷記錄' : `⚠️ ${failureCount}次中斷`;
+  doc.text(statusText, startX, timelineY + timelineHeight + 30);
+  
+  // 三個統計卡片 - 壓縮高度為回應時間圖表留空間
+  const cardY = startY + 70;   // 調整垂直間距
+  const cardWidth = 140;       // 增加卡片寬度以便文字置中
+  const cardHeight = 50;       // 增加卡片高度
+  const cardSpacing = 160;     // 調整卡片間距
+  
+  // 卡片1：故障次數
+  doc.roundedRect(startX, cardY, cardWidth, cardHeight, 5)
+     .fillAndStroke(failureCount === 0 ? '#E8F5E8' : '#FFEBEE', failureCount === 0 ? '#4CAF50' : '#F44336');
+  
+  // 置中顯示數字
+  doc.fontSize(24).fillColor(failureCount === 0 ? '#4CAF50' : '#F44336').font('NotoSansTC');
+  doc.text(`${failureCount} 次故障`, startX, cardY + 10, { width: cardWidth, align: 'center' });
+  
+  // 置中顯示說明文字
+  doc.fontSize(10).fillColor('#666');
+  doc.text(`過去${totalHours}小時`, startX, cardY + 32, { width: cardWidth, align: 'center' });
+  
+  // 卡片2：連續運行時間
+  doc.roundedRect(startX + cardSpacing, cardY, cardWidth, cardHeight, 5)
+     .fillAndStroke('#E3F2FD', '#2196F3');
+  
+  // 置中顯示時間
+  doc.fontSize(18).fillColor('#2196F3').font('NotoSansTC');
+  doc.text(continuousUptime, startX + cardSpacing, cardY + 10, { width: cardWidth, align: 'center' });
+  
+  // 置中顯示說明文字
+  doc.fontSize(10).fillColor('#666');
+  doc.text('連續正常運行', startX + cardSpacing, cardY + 32, { width: cardWidth, align: 'center' });
+  
+  // 卡片3：成功請求
+  doc.roundedRect(startX + cardSpacing * 2, cardY, cardWidth, cardHeight, 5)
+     .fillAndStroke('#FFF3E0', '#FF9800');
+  
+  // 置中顯示次數
+  doc.fontSize(20).fillColor('#FF9800').font('NotoSansTC');
+  doc.text(`${stats.successfulChecks || 0} 次`, startX + cardSpacing * 2, cardY + 10, { width: cardWidth, align: 'center' });
+  
+  // 置中顯示說明文字
+  doc.fontSize(10).fillColor('#666');
+  doc.text('成功請求', startX + cardSpacing * 2, cardY + 32, { width: cardWidth, align: 'center' });
+}
+
+// 計算故障次數
+function calculateFailureCount(metrics) {
+  if (!metrics || metrics.length === 0) return 0;
+  
+  return metrics.filter(m => m.status === 'down' || m.isHealthy === false).length;
+}
+
+// 獲取時間範圍對應的小時數
+function getTimeRangeHours(timeRange) {
+  const ranges = {
+    '1h': 1,
+    '6h': 6, 
+    '12h': 12,
+    '24h': 24,
+    '1w': 168,
+    '1m': 720
+  };
+  return ranges[timeRange] || 24;
+}
+
+// 計算連續正常運行時間
+function calculateContinuousUptime(metrics) {
+  if (!metrics || metrics.length === 0) return '24小時';
+  
+  // 查找最近的故障記錄
+  const recentMetrics = metrics.slice(-100); // 取最近100個記錄
+  const lastFailureIndex = recentMetrics.findIndex(m => m.status === 'down' || m.isHealthy === false);
+  
+  if (lastFailureIndex === -1) {
+    return '24小時+'; // 沒有找到故障記錄
+  }
+  
+  const continuousCount = recentMetrics.length - lastFailureIndex - 1;
+  const hours = Math.floor(continuousCount * 5 / 60); // 假設5分鐘間隔
+  const minutes = continuousCount * 5 % 60;
+  
+  if (hours > 0) {
+    return `${hours}小時${minutes > 0 ? minutes + '分' : ''}`;
+  } else {
+    return `${minutes}分鐘`;
+  }
+}
+
+// 緊湊版可用性分析圖表（保留備用）
+function drawCompactUptimeChart(doc, uptime, centerX, centerY) {
+  const outerRadius = 60; // 縮小半徑
+  const innerRadius = 35; // 縮小內環
+  
+  // 計算角度
+  const uptimeAngle = (uptime / 100) * Math.PI * 2;
+  
+  doc.save();
+  doc.lineWidth(0);
+  
+  // 繪製外環背景（灰色）
+  doc.fillColor('#F5F5F5');
+  doc.circle(centerX, centerY, outerRadius).fill();
+  
+  // 繪製內環背景（白色）
+  doc.fillColor('#FFFFFF');
+  doc.circle(centerX, centerY, innerRadius).fill();
+  
+  // 繪製可用性部分
+  if (uptime > 0) {
+    doc.fillColor('#4CAF50');
+    doc.moveTo(centerX, centerY);
+    doc.lineTo(centerX + outerRadius, centerY);
+    doc.arc(centerX, centerY, outerRadius, 0, uptimeAngle, false);
+    doc.lineTo(centerX, centerY);
+    doc.fill();
+    
+    // 內圓挖空
+    doc.fillColor('#FFFFFF');
+    doc.circle(centerX, centerY, innerRadius).fill();
+  }
+  
+  // 繪製停機部分
+  if (uptime < 100) {
+    doc.fillColor('#F44336');
+    doc.moveTo(centerX, centerY);
+    doc.arc(centerX, centerY, outerRadius, uptimeAngle, Math.PI * 2, false);
+    doc.lineTo(centerX, centerY);
+    doc.fill();
+    
+    // 內圓挖空
+    doc.fillColor('#FFFFFF');
+    doc.circle(centerX, centerY, innerRadius).fill();
+  }
+  
+  // 中央數值顯示
+  doc.fillColor('#333');
+  doc.fontSize(24);
+  doc.font('NotoSansTC');
+  doc.text(`${uptime}%`, centerX - 25, centerY - 8);
+  
+  // 橫向指標卡片（節省垂直空間）
+  const cardY = centerY + 80;
+  const cardWidth = 100;
+  const cardHeight = 40;
+  
+  // 左側卡片 - 正常運行
+  doc.roundedRect(centerX - 110, cardY, cardWidth, cardHeight, 5)
+     .fillAndStroke('#E8F5E8', '#4CAF50');
+  
+  doc.fontSize(10).fillColor('#4CAF50').font('NotoSansTC')
+     .text('正常運行', centerX - 100, cardY + 8);
+  doc.fontSize(14)
+     .text(`${uptime.toFixed(1)}%`, centerX - 100, cardY + 22);
+  
+  // 右側卡片 - 停機時間
+  const downtimePercent = (100 - uptime);
+  doc.roundedRect(centerX + 10, cardY, cardWidth, cardHeight, 5)
+     .fillAndStroke('#FFEBEE', '#F44336');
+  
+  doc.fontSize(10).fillColor('#F44336').font('NotoSansTC')
+     .text('停機時間', centerX + 20, cardY + 8);
+  doc.fontSize(14)
+     .text(`${downtimePercent.toFixed(1)}%`, centerX + 20, cardY + 22);
+  
+  doc.restore();
+}
+
+// 現代化可用性分析圖表（原版，保留備用）
+function drawModernUptimeChart(doc, uptime, centerX, centerY) {
+  const outerRadius = 80;
+  const innerRadius = 50; // 環形圖
+  
+  // 計算角度
+  const uptimeAngle = (uptime / 100) * Math.PI * 2;
+  const downtimeAngle = Math.PI * 2 - uptimeAngle;
+  
+  doc.save();
+  doc.lineWidth(0);
+  
+  // 繪製外環背景（灰色）
+  doc.fillColor('#F5F5F5');
+  doc.circle(centerX, centerY, outerRadius).fill();
+  
+  // 繪製內環背景（白色）
+  doc.fillColor('#FFFFFF');
+  doc.circle(centerX, centerY, innerRadius).fill();
+  
+  // 繪製可用性部分（漸變效果模擬）
+  if (uptime > 0) {
+    // 主色調
+    doc.fillColor('#4CAF50');
+    doc.moveTo(centerX, centerY);
+    doc.lineTo(centerX + outerRadius, centerY);
+    doc.arc(centerX, centerY, outerRadius, 0, uptimeAngle, false);
+    doc.lineTo(centerX, centerY);
+    doc.fill();
+    
+    // 內圓挖空
+    doc.fillColor('#FFFFFF');
+    doc.circle(centerX, centerY, innerRadius).fill();
+  }
+  
+  // 繪製停機部分
+  if (uptime < 100) {
+    doc.fillColor('#F44336');
+    doc.moveTo(centerX, centerY);
+    doc.arc(centerX, centerY, outerRadius, uptimeAngle, Math.PI * 2, false);
+    doc.lineTo(centerX, centerY);
+    doc.fill();
+    
+    // 內圓挖空
+    doc.fillColor('#FFFFFF');
+    doc.circle(centerX, centerY, innerRadius).fill();
+  }
+  
+  // 中央數值顯示 - 只顯示百分比，移除"可用性"文字
+  doc.fillColor('#333');
+  doc.fontSize(28);
+  doc.font('NotoSansTC');
+  doc.text(`${uptime}%`, centerX - 30, centerY - 10);
+  
+  // 現代化指標卡片 - 優化位置和大小
+  const cardY = centerY + 100;
+  const cardWidth = 120;
+  const cardHeight = 50;
+  
+  // 左側卡片 - 正常運行
+  doc.roundedRect(centerX - 130, cardY, cardWidth, cardHeight, 6)
+     .fillAndStroke('#E8F5E8', '#4CAF50');
+  
+  doc.fontSize(11).fillColor('#4CAF50').font('NotoSansTC')
+     .text('正常運行', centerX - 120, cardY + 12);
+  doc.fontSize(16)
+     .text(`${uptime.toFixed(1)}%`, centerX - 120, cardY + 28);
+  
+  // 右側卡片 - 停機時間
+  const downtimePercent = (100 - uptime);
+  doc.roundedRect(centerX + 10, cardY, cardWidth, cardHeight, 6)
+     .fillAndStroke('#FFEBEE', '#F44336');
+  
+  doc.fontSize(11).fillColor('#F44336').font('NotoSansTC')
+     .text('停機時間', centerX + 20, cardY + 12);
+  doc.fontSize(16)
+     .text(`${downtimePercent.toFixed(1)}%`, centerX + 20, cardY + 28);
+  
+  doc.restore();
+}
+
+// 舊版圓餅圖（保留備用）
+function drawUptimePieChart(doc, uptime, x, y) {
+  const centerX = x + 150;
+  const centerY = y + 50;
+  const radius = 40;
+  
+  // 計算角度
+  const uptimeAngle = (uptime / 100) * Math.PI * 2;
+  const downtimeAngle = Math.PI * 2 - uptimeAngle;
+  
+  // 繪製可用性部分（綠色）
+  doc.save();
+  doc.fillColor('#4CAF50');
+  doc.lineWidth(0);
+  
+  // 繪製扇形
+  doc.moveTo(centerX, centerY);
+  doc.lineTo(centerX + radius, centerY);
+  doc.arc(centerX, centerY, radius, 0, uptimeAngle, false);
+  doc.lineTo(centerX, centerY);
+  doc.fill();
+  
+  // 繪製停機部分（紅色）
+  if (uptime < 100) {
+    doc.fillColor('#f44336');
+    doc.moveTo(centerX, centerY);
+    doc.arc(centerX, centerY, radius, uptimeAngle, Math.PI * 2, false);
+    doc.lineTo(centerX, centerY);
+    doc.fill();
+  }
+  
+  // 添加標籤
+  doc.fillColor('#333');
+  doc.fontSize(14);
+  doc.text(`${uptime}%`, centerX - 20, centerY - 7);
+  
+  // 圖例
+  doc.fontSize(10);
+  doc.fillColor('#4CAF50');
+  doc.rect(x + 250, y + 30, 10, 10).fill();
+  doc.fillColor('#333');
+  doc.text(`可用 (${uptime}%)`, x + 265, y + 30);
+  
+  if (uptime < 100) {
+    doc.fillColor('#f44336');
+    doc.rect(x + 250, y + 50, 10, 10).fill();
+    doc.fillColor('#333');
+    doc.text(`停機 (${(100 - uptime).toFixed(1)}%)`, x + 265, y + 50);
+  }
+  
+  doc.restore();
+}
+
+// 網頁版風格的堆疊區域圖表（回應時間組成分析）
+function drawEnhancedResponseChart(doc, responseTimeData, startX, startY, timeRange = '24h') {
+  // 確保不渲染任何圖表標題（包括「回應時間趨勢」等）
+  
+  const chartWidth = 500;
+  const chartHeight = 180; // 進一步縮小高度，放在時間軸下方
+  const margin = { top: 20, right: 30, bottom: 60, left: 60 };
+  
+  // 根據時間範圍篩選數據，而不是固定取30個點
+  let filteredData = responseTimeData;
+  
+  if (responseTimeData.length > 0) {
+    const now = new Date();
+    const timeRangeMs = getTimeRangeInMs(timeRange);
+    const cutoffTime = new Date(now.getTime() - timeRangeMs);
+    
+    // 篩選在時間範圍內的數據
+    filteredData = responseTimeData.filter(point => {
+      const pointTime = new Date(point.timestamp || point.time);
+      return pointTime >= cutoffTime;
+    });
+    
+    // 如果數據太多，取樣本以提高性能（最多100個點）
+    if (filteredData.length > 100) {
+      const step = Math.ceil(filteredData.length / 100);
+      filteredData = filteredData.filter((_, index) => index % step === 0);
+    }
+  }
+  
+  const recentData = filteredData;
+  if (recentData.length === 0) return;
+  
+  // 計算總回應時間範圍（包含所有組成部分）
+  let maxTotalTime = 0;
+  recentData.forEach(point => {
+    const totalTime = (point.dnsTime || 0) + (point.connectTime || 0) + 
+                     (point.sslHandshakeTime || 0) + (point.timeToFirstByte || 0) + 
+                     (point.downloadTime || point.responseTime || 0);
+    maxTotalTime = Math.max(maxTotalTime, totalTime);
+  });
+  
+  // 如果沒有分解數據，使用responseTime作為總時間
+  if (maxTotalTime === 0) {
+    maxTotalTime = Math.max(...recentData.map(d => d.responseTime || 0));
+  }
+  
+  const responseRange = maxTotalTime + 50;
+  
+  // 繪製圖表背景 - 使用漸層效果
+  doc.rect(startX, startY, chartWidth, chartHeight)
+     .fillColor('#ffffff')
+     .fill()
+     .strokeColor('#e0e0e0')
+     .lineWidth(1)
+     .stroke();
+  
+  // 繪製圖表內部背景
+  const plotArea = {
+    x: startX + margin.left,
+    y: startY + margin.top,
+    width: chartWidth - margin.left - margin.right,
+    height: chartHeight - margin.top - margin.bottom
+  };
+  
+  doc.rect(plotArea.x, plotArea.y, plotArea.width, plotArea.height)
+     .fillColor('#fafbfc')
+     .fill();
+  
+  // 繪製精細網格線
+  const gridLines = 6;
+  doc.strokeColor('#f0f0f0').lineWidth(0.5);
+  
+  // 水平網格線
+  for (let i = 0; i <= gridLines; i++) {
+    const y = plotArea.y + plotArea.height * i / gridLines;
+    doc.moveTo(plotArea.x, y)
+       .lineTo(plotArea.x + plotArea.width, y)
+       .stroke();
+  }
+  
+  // 垂直網格線
+  const verticalLines = Math.min(recentData.length, 10);
+  for (let i = 0; i <= verticalLines; i++) {
+    const x = plotArea.x + plotArea.width * i / verticalLines;
+    doc.moveTo(x, plotArea.y)
+       .lineTo(x, plotArea.y + plotArea.height)
+       .stroke();
+  }
+  
+  // Y軸標籤和刻度
+  doc.fillColor('#666666').fontSize(9);
+  for (let i = 0; i <= gridLines; i++) {
+    const value = maxTotalTime - (responseRange * i / gridLines);
+    const y = plotArea.y + plotArea.height * i / gridLines;
+    
+    // 刻度線
+    doc.strokeColor('#cccccc').lineWidth(1);
+    doc.moveTo(startX + margin.left - 5, y)
+       .lineTo(startX + margin.left, y)
+       .stroke();
+    
+    // 標籤 - 使用智能格式化
+    doc.text(formatResponseTime(Math.round(value)), startX + 10, y - 6, { 
+      align: 'right',
+      width: margin.left - 15
+    });
+  }
+  
+  // Y軸標題
+  doc.fillColor('#333333').fontSize(10);
+  doc.save();
+  doc.translate(startX + 15, startY + chartHeight / 2);
+  doc.rotate(-90);
+  // 移除 Y 軸標籤「回應時間 (ms)」
+  doc.restore();
+  
+  // 定義堆疊區域的顏色（對應網頁版）
+  const stackColors = {
+    dns: '#16a34a',        // 綠色 - DNS查詢時間
+    connect: '#f59e0b',    // 黃色 - 連接建立時間  
+    ssl: '#8b5cf6',        // 紫色 - SSL交握時間
+    ttfb: '#ef4444',       // 紅色 - 等待時間(TTFB)
+    download: '#06b6d4'    // 青色 - 內容下載時間
+  };
+  
+  // 繪製堆疊區域圖
+  if (recentData.length > 1) {
+    
+    // 定義堆疊順序（從下到上）
+    const stackLayers = [
+      { key: 'dnsTime', color: stackColors.dns, name: 'DNS查詢' },
+      { key: 'connectTime', color: stackColors.connect, name: '連接建立' },
+      { key: 'sslHandshakeTime', color: stackColors.ssl, name: 'SSL交握' },
+      { key: 'timeToFirstByte', color: stackColors.ttfb, name: '等待時間' },
+      { key: 'downloadTime', color: stackColors.download, name: '下載內容' }
+    ];
+    
+    // 為每個數據點計算累積值
+    const processedData = recentData.map((point, index) => {
+      let cumulativeValue = 0;
+      const layers = {};
+      
+      // 如果沒有分解數據，將整個responseTime作為download時間
+      if (!point.dnsTime && !point.connectTime && !point.sslHandshakeTime && 
+          !point.timeToFirstByte && !point.downloadTime) {
+        layers.downloadTime = point.responseTime || 0;
+        cumulativeValue = point.responseTime || 0;
+      } else {
+        // 使用分解的時間數據
+        stackLayers.forEach(layer => {
+          const value = point[layer.key] || 0;
+          layers[layer.key] = cumulativeValue;
+          cumulativeValue += value;
+        });
+      }
+      
+      const x = plotArea.x + (plotArea.width * index / (recentData.length - 1));
+      return { ...layers, x, totalHeight: cumulativeValue };
+    });
+    
+    // 繪製每個堆疊層
+    stackLayers.forEach(layer => {
+      doc.fillColor(layer.color);
+      
+      // 創建該層的路徑
+      let hasData = false;
+      const pathPoints = [];
+      
+      processedData.forEach(dataPoint => {
+        const layerBottom = dataPoint[layer.key] || 0;
+        const layerTop = layerBottom + (recentData[processedData.indexOf(dataPoint)][layer.key] || 0);
+        
+        if (layerTop > layerBottom) {
+          hasData = true;
+          
+          const yBottom = plotArea.y + plotArea.height * (1 - layerBottom / responseRange);
+          const yTop = plotArea.y + plotArea.height * (1 - layerTop / responseRange);
+          
+          pathPoints.push({
+            x: dataPoint.x,
+            yBottom: Math.max(plotArea.y, Math.min(plotArea.y + plotArea.height, yBottom)),
+            yTop: Math.max(plotArea.y, Math.min(plotArea.y + plotArea.height, yTop))
+          });
+        }
+      });
+      
+      // 繪製該層的填充區域
+      if (hasData && pathPoints.length > 0) {
+        // 上邊界
+        doc.moveTo(pathPoints[0].x, pathPoints[0].yTop);
+        pathPoints.forEach(point => {
+          doc.lineTo(point.x, point.yTop);
+        });
+        
+        // 右邊界到下邊界
+        for (let i = pathPoints.length - 1; i >= 0; i--) {
+          doc.lineTo(pathPoints[i].x, pathPoints[i].yBottom);
+        }
+        
+        // 閉合路徑並填充
+        doc.closePath();
+        doc.fill();
+      }
+    });
+    
+    // 繪製邊框線
+    doc.strokeColor('#cccccc').lineWidth(0.5);
+    processedData.forEach(dataPoint => {
+      const totalY = plotArea.y + plotArea.height * (1 - dataPoint.totalHeight / responseRange);
+      if (dataPoint === processedData[0]) {
+        doc.moveTo(dataPoint.x, totalY);
+      } else {
+        doc.lineTo(dataPoint.x, totalY);
+      }
+    });
+    doc.stroke();
+  }
+  
+  // X軸時間標籤 - 顯示多個時間點
+  if (recentData.length > 0) {
+    doc.fillColor('#666666').fontSize(9);
+    
+    const timePoints = Math.min(5, recentData.length);
+    for (let i = 0; i < timePoints; i++) {
+      const dataIndex = Math.floor(recentData.length * i / (timePoints - 1));
+      const point = recentData[Math.min(dataIndex, recentData.length - 1)];
+      const x = plotArea.x + (plotArea.width * i / (timePoints - 1));
+      
+      // 處理時間戳格式 - 修正時間標籤顯示
+      let timeStr = '';
+      
+      // 嘗試多種時間字段名稱
+      const timeValue = point.timestamp || point.time || point.date;
+      
+      if (timeValue) {
+        try {
+          let date;
+          
+          // 如果是字符串，嘗試直接解析
+          if (typeof timeValue === 'string') {
+            date = new Date(timeValue);
+          } else if (typeof timeValue === 'number') {
+            // 如果是數字，判斷是秒還是毫秒
+            date = timeValue < 10000000000 ? new Date(timeValue * 1000) : new Date(timeValue);
+          } else {
+            date = new Date(timeValue);
+          }
+          
+          // 驗證日期是否有效
+          if (!isNaN(date.getTime()) && date.getTime() > 0) {
+            // 轉換為台灣時區
+            const taiwanTime = moment(date).utc().utcOffset(8);
+            timeStr = taiwanTime.format('HH:mm');
+          } else {
+            console.log('Invalid date:', timeValue, 'for point:', point);
+            // 使用相對時間標籤
+            const startTime = moment().subtract(getTimeRangeInMs(timeRange), 'milliseconds');
+            const relativeTime = startTime.clone().add(i * (getTimeRangeInMs(timeRange) / (timePoints - 1)), 'milliseconds');
+            timeStr = relativeTime.format('HH:mm');
+          }
+        } catch (error) {
+          console.log('Time parsing error:', error, 'for value:', timeValue);
+          // 使用相對時間標籤
+          const startTime = moment().subtract(getTimeRangeInMs(timeRange), 'milliseconds');
+          const relativeTime = startTime.clone().add(i * (getTimeRangeInMs(timeRange) / (timePoints - 1)), 'milliseconds');
+          timeStr = relativeTime.format('HH:mm');
+        }
+      } else {
+        console.log('No time field found in point:', point);
+        // 使用相對時間標籤
+        const startTime = moment().subtract(getTimeRangeInMs(timeRange), 'milliseconds');
+        const relativeTime = startTime.clone().add(i * (getTimeRangeInMs(timeRange) / (timePoints - 1)), 'milliseconds');
+        timeStr = relativeTime.format('HH:mm');
+      }
+      
+      // 刻度線
+      doc.strokeColor('#cccccc').lineWidth(1);
+      doc.moveTo(x, plotArea.y + plotArea.height)
+         .lineTo(x, plotArea.y + plotArea.height + 8)
+         .stroke();
+      
+      // 時間標籤 - 向下移動避免與圖表重疊
+      doc.text(timeStr, x - 20, plotArea.y + plotArea.height + 18, { 
+        align: 'center',
+        width: 40
+      });
+    }
+  }
+  
+  // X軸標題已移除，不顯示"檢查時間"文字
+  
+  // 圖表邊框
+  doc.rect(plotArea.x, plotArea.y, plotArea.width, plotArea.height)
+     .strokeColor('#cccccc')
+     .lineWidth(1)
+     .stroke();
+
+  // 繪製圖例（堆疊區域說明）- 調整位置避免與時間標籤重疊
+  let legendY = startY + chartHeight - 15; // 進一步向下調整避免重疊
+  const legendItemWidth = 90;
+  let legendX = startX + margin.left;
+  
+  doc.fontSize(8).fillColor('#666666');
+  
+  const stackLegends = [
+    { color: stackColors.dns, name: 'DNS查詢' },
+    { color: stackColors.connect, name: '連接建立' },
+    { color: stackColors.ssl, name: 'SSL交握' },
+    { color: stackColors.ttfb, name: '等待時間' },
+    { color: stackColors.download, name: '下載內容' }
+  ];
+  
+  stackLegends.forEach((legend, index) => {
+    // 移除換行邏輯，讓所有圖例項目保持在同一行
+    
+    // 色塊
+    doc.rect(legendX, legendY, 8, 8)
+       .fillColor(legend.color)
+       .fill();
+    
+    // 文字
+    doc.fillColor('#666666')
+       .text(legend.name, legendX + 12, legendY + 1);
+    
+    legendX += legendItemWidth;
+  });
+}
+
+// 繪製回應時間折線圖（舊版，保留備用）
+function drawResponseTimeChart(doc, metrics, x, y, width, height) {
+  // 準備數據（最多顯示30個數據點）
+  const displayData = metrics.slice(-30);
+  if (displayData.length === 0) return;
+  
+  // 找出最大最小值
+  const maxTime = Math.max(...displayData.map(d => d.responseTime));
+  const minTime = Math.min(...displayData.map(d => d.responseTime));
+  const range = maxTime - minTime || 1;
+  
+  // 繪製座標軸
+  doc.save();
+  doc.strokeColor('#666');
+  doc.lineWidth(1);
+  
+  // Y軸
+  doc.moveTo(x, y).lineTo(x, y + height).stroke();
+  
+  // X軸
+  doc.moveTo(x, y + height).lineTo(x + width, y + height).stroke();
+  
+  // Y軸標籤
+  doc.fontSize(9);
+  doc.fillColor('#666');
+  doc.text(`${maxTime}ms`, x - 40, y - 5);
+  doc.text(`${Math.round((maxTime + minTime) / 2)}ms`, x - 40, y + height/2 - 5);
+  doc.text(`${minTime}ms`, x - 40, y + height - 5);
+  
+  // 繪製網格線
+  doc.strokeColor('#e0e0e0');
+  doc.lineWidth(0.5);
+  for (let i = 1; i < 5; i++) {
+    const yPos = y + (height * i / 5);
+    doc.moveTo(x, yPos).lineTo(x + width, yPos).stroke();
+  }
+  
+  // 繪製數據線
+  doc.strokeColor('#1976D2');
+  doc.lineWidth(2);
+  
+  const xStep = width / (displayData.length - 1 || 1);
+  
+  displayData.forEach((data, index) => {
+    const xPos = x + (index * xStep);
+    const yPos = y + height - ((data.responseTime - minTime) / range * height);
+    
+    if (index === 0) {
+      doc.moveTo(xPos, yPos);
+    } else {
+      doc.lineTo(xPos, yPos);
+    }
+  });
+  doc.stroke();
+  
+  // 繪製數據點
+  doc.fillColor('#1976D2');
+  displayData.forEach((data, index) => {
+    const xPos = x + (index * xStep);
+    const yPos = y + height - ((data.responseTime - minTime) / range * height);
+    doc.circle(xPos, yPos, 2).fill();
+  });
+  
+  // X軸時間標籤（顯示首尾時間）
+  doc.fontSize(8);
+  doc.fillColor('#666');
+  if (displayData.length > 0) {
+    const firstTime = moment(displayData[0].time).utc().utcOffset(8).format('HH:mm');
+    const lastTime = moment(displayData[displayData.length - 1].time).utc().utcOffset(8).format('HH:mm');
+    doc.text(firstTime, x - 10, y + height + 10);
+    doc.text(lastTime, x + width - 20, y + height + 10);
+  }
+  
+  // 標題
+  doc.fontSize(10);
+  doc.fillColor('#333');
+  doc.text(`最近 ${displayData.length} 次檢查`, x + width/2 - 40, y + height + 25);
+  
+  doc.restore();
+}
+
+module.exports = router;

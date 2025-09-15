@@ -1,0 +1,32 @@
+[
+  {
+    "content": "停止簡化版後端服務",
+    "status": "completed",
+    "activeForm": "停止簡化版後端服務中"
+  },
+  {
+    "content": "修復原始後端代碼中的依賴問題",
+    "status": "completed",
+    "activeForm": "修復原始後端代碼中的依賴問題中"
+  },
+  {
+    "content": "重新構建並啟動完整功能後端",
+    "status": "in_progress",
+    "activeForm": "重新構建並啟動完整功能後端中"
+  },
+  {
+    "content": "測試完整監控功能",
+    "status": "pending",
+    "activeForm": "測試完整監控功能中"
+  },
+  {
+    "content": "恢復 Grafana 連接",
+    "status": "pending",
+    "activeForm": "恢復 Grafana 連接中"
+  },
+  {
+    "content": "驗證所有功能正常運行",
+    "status": "pending",
+    "activeForm": "驗證所有功能正常遍行中"
+  }
+]
