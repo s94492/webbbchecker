@@ -51,6 +51,8 @@ services:
       - HOST_IP=${HOST_IP:-http://localhost}
     volumes:
       - ./NotoSansTC-VariableFont_wght.ttf:/app/fonts/NotoSansTC.ttf:ro
+      - ./backend/uploads:/app/uploads
+      - ./backend/config:/app/config
     depends_on:
       - influxdb
     networks:
