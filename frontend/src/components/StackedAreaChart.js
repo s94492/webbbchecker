@@ -205,6 +205,15 @@ const StackedAreaChart = ({ data, title = "回應時間組成分析" }) => {
     );
   }
 
+  // 根據資料量決定 X 軸顯示間隔
+  const getXAxisInterval = () => {
+    const dataLength = processedData.length;
+    if (dataLength <= 50) return 0; // 顯示所有
+    if (dataLength <= 200) return Math.floor(dataLength / 20); // 顯示約20個
+    if (dataLength <= 500) return Math.floor(dataLength / 15); // 顯示約15個
+    return Math.floor(dataLength / 10); // 顯示約10個
+  };
+
   return (
     <Box>
       <Typography variant="subtitle1" className="font-inter font-medium text-neutral-800 mb-3">
@@ -213,11 +222,12 @@ const StackedAreaChart = ({ data, title = "回應時間組成分析" }) => {
       <ResponsiveContainer width="100%" height={400}>
         <AreaChart data={processedData} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-          <XAxis 
-            dataKey="time" 
+          <XAxis
+            dataKey="time"
             tick={{ fontSize: 12 }}
             tickLine={{ stroke: '#e0e0e0' }}
             axisLine={{ stroke: '#e0e0e0' }}
+            interval={getXAxisInterval()}
           />
           <YAxis 
             domain={yAxisDomain}

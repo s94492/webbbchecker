@@ -23,11 +23,10 @@ import {
   MenuItem,
   InputLabel,
   Tabs,
-  Tab,
-  TablePagination
+  Tab
 } from '@mui/material';
-import {
-  Refresh,
+import { 
+  Refresh, 
   TrendingUp,
   Speed,
   Dns,
@@ -40,13 +39,7 @@ import {
   GetApp,
   PictureAsPdf,
   TableChart,
-  Pause,
-  Summarize,
-  Info,
-  Analytics,
-  Assessment,
-  Description,
-  History
+  Pause
 } from '@mui/icons-material';
 import { Link, useParams } from 'react-router-dom';
 import { 
@@ -76,9 +69,7 @@ const WebsiteDetail = () => {
   const [error, setError] = useState(null);
   const [timeRange, setTimeRange] = useState('24h');
   const [reportLoading, setReportLoading] = useState({ pdf: false, csv: false });
-  const [tabValue, setTabValue] = useState(0);
-  const [page, setPage] = useState(0);
-  const [rowsPerPage, setRowsPerPage] = useState(20);
+  const [activeTab, setActiveTab] = useState(0); // 新增：Tab 狀態
 
   const timeRanges = [
     { value: '1h', label: '最近 1 小時' },
@@ -195,37 +186,8 @@ const WebsiteDetail = () => {
   };
 
   const formatMetricsData = (metrics) => {
-    // 根據時間範圍決定時間格式
-    const getTimeFormat = () => {
-      switch(timeRange) {
-        case '1h':
-        case '3h':
-        case '6h':
-          return 'HH:mm'; // 小時範圍顯示時:分
-        case '12h':
-        case '24h':
-          return 'MM/dd HH:mm'; // 天內範圍顯示月/日 時:分
-        case '2d':
-        case '7d':
-          return 'MM/dd HH時'; // 多天範圍顯示月/日 時
-        case '14d':
-        case '30d':
-          return 'MM/dd'; // 長時間範圍只顯示月/日
-        case '90d':
-          return 'MM/dd'; // 90天也只顯示月/日
-        default:
-          return 'HH:mm';
-      }
-    };
-
-    const timeFormat = getTimeFormat();
-
-    // 決定是否需要減少顯示的資料點（用於 X 軸標籤）
-    const shouldReduceLabels = ['7d', '14d', '30d', '90d'].includes(timeRange);
-
-    return metrics.map((metric, index) => ({
-      // 對於長時間範圍，減少 X 軸標籤密度
-      time: shouldReduceLabels && index % 2 !== 0 ? '' : format(new Date(metric.time), timeFormat),
+    return metrics.map(metric => ({
+      time: format(new Date(metric.time), 'HH:mm'),
       fullTime: format(new Date(metric.time), 'yyyy/MM/dd HH:mm:ss'),
       responseTime: metric.responseTime,
       statusCode: metric.statusCode,
@@ -358,55 +320,13 @@ const WebsiteDetail = () => {
         </Box>
       </Box>
 
-      {/* 分頁區域 */}
-      <Paper className="bg-white rounded-xl shadow-sm">
-        <Tabs
-          value={tabValue}
-          onChange={(e, newValue) => setTabValue(newValue)}
-          sx={{
-            borderBottom: 1,
-            borderColor: 'divider',
-            '& .MuiTab-root': {
-              textTransform: 'none',
-              fontWeight: 500,
-              fontSize: '0.875rem',
-              minHeight: 48,
-              minWidth: 120
-            }
-          }}
-        >
-          <Tab
-            icon={<Summarize sx={{ fontSize: 18 }} />}
-            iconPosition="start"
-            label="摘要"
-            sx={{ gap: 0.5 }}
-          />
-          <Tab
-            icon={<Info sx={{ fontSize: 18 }} />}
-            iconPosition="start"
-            label="詳細設定"
-            sx={{ gap: 0.5 }}
-          />
-          <Tab
-            icon={<History sx={{ fontSize: 18 }} />}
-            iconPosition="start"
-            label="紀錄報表"
-            sx={{ gap: 0.5 }}
-          />
-        </Tabs>
-
-        {/* Tab Panel 0: 摘要 */}
-        {tabValue === 0 && (
-          <Box p={3}>
-            <Grid container spacing={3}>
-              {/* 基本資訊卡片 */}
-              <Grid item xs={12}>
-                <Card className="bg-white rounded-xl shadow-sm">
-                  <CardContent>
-                    <Typography variant="h6" className="font-inter font-semibold text-neutral-800 mb-4">
-                      基本資訊
-                    </Typography>
-                    <Grid container spacing={3}>
+      {/* 基本資訊 */}
+      <Card className="bg-white rounded-xl shadow-sm">
+        <CardContent>
+          <Typography variant="h6" className="font-inter font-semibold text-neutral-800 mb-4">
+            基本資訊
+          </Typography>
+          <Grid container spacing={3}>
             <Grid item xs={12} md={6}>
               <Box className="space-y-3">
                 <Box display="flex" alignItems="center" gap={2}>
@@ -450,17 +370,15 @@ const WebsiteDetail = () => {
                     </Typography>
                   </Box>
                 )}
-                      </Box>
-                    </Grid>
-                  </Grid>
-                </CardContent>
-              </Card>
+              </Box>
             </Grid>
+          </Grid>
+        </CardContent>
+      </Card>
 
-            {/* 統計摘要 */}
-            {stats && (
-              <Grid item xs={12}>
-                <Card className="bg-white rounded-xl shadow-sm">
+      {/* 統計摘要 */}
+      {stats && (
+        <Card className="bg-white rounded-xl shadow-sm">
           <CardContent>
             <Typography variant="h6" className="font-inter font-semibold text-neutral-800 mb-4">
               {timeRanges.find(r => r.value === timeRange)?.label} 統計摘要
@@ -534,20 +452,16 @@ const WebsiteDetail = () => {
                   </Box>
                 </Paper>
               </Grid>
-                    </Grid>
-                  </CardContent>
-                </Card>
-              </Grid>
-            )}
-
-            {/* 異常事件時間線 */}
-            <Grid item xs={12}>
-              <EventTimeline events={events} loading={loading} />
             </Grid>
+          </CardContent>
+        </Card>
+      )}
 
-            {/* 時間範圍選擇器與圖表 */}
-            <Grid item xs={12}>
-              <Card className="bg-white rounded-xl shadow-sm">
+      {/* 異常事件時間線 */}
+      <EventTimeline events={events} loading={loading} />
+
+      {/* 時間範圍選擇器與圖表 */}
+      <Card className="bg-white rounded-xl shadow-sm">
         <CardContent>
           <Box display="flex" justifyContent="space-between" alignItems="center" mb={4}>
             <Typography variant="h6" className="font-inter font-semibold text-neutral-800">
@@ -581,310 +495,9 @@ const WebsiteDetail = () => {
               </Grid>
             </Grid>
           )}
-                </CardContent>
-              </Card>
-            </Grid>
-          </Grid>
-        </Box>
-      )}
-
-      {/* Tab Panel 1: 詳細設定 */}
-      {tabValue === 1 && (
-        <Box p={3}>
-          <Grid container spacing={3}>
-            {/* 連線詳情 */}
-            <Grid item xs={12} md={6}>
-              <Card className="bg-white rounded-xl shadow-sm">
-                <CardContent>
-                  <Box display="flex" alignItems="center" gap={2} mb={3}>
-                    <Dns className="text-blue-600" />
-                    <Typography variant="h6" className="font-inter font-semibold text-neutral-800">
-                      連線詳情
-                    </Typography>
-                  </Box>
-                  {metrics.length > 0 && (
-                    <TableContainer>
-                      <Table size="small">
-                        <TableBody>
-                          <TableRow>
-                            <TableCell>DNS 解析時間</TableCell>
-                            <TableCell align="right">
-                              {metrics[metrics.length - 1]?.dnsTime || 0} ms
-                            </TableCell>
-                          </TableRow>
-                          <TableRow>
-                            <TableCell>TCP 連線時間</TableCell>
-                            <TableCell align="right">
-                              {metrics[metrics.length - 1]?.connectTime || 0} ms
-                            </TableCell>
-                          </TableRow>
-                          <TableRow>
-                            <TableCell>SSL 握手時間</TableCell>
-                            <TableCell align="right">
-                              {metrics[metrics.length - 1]?.sslHandshakeTime || 0} ms
-                            </TableCell>
-                          </TableRow>
-                          <TableRow>
-                            <TableCell>首字節時間 (TTFB)</TableCell>
-                            <TableCell align="right">
-                              {metrics[metrics.length - 1]?.timeToFirstByte || 0} ms
-                            </TableCell>
-                          </TableRow>
-                          <TableRow>
-                            <TableCell>下載時間</TableCell>
-                            <TableCell align="right">
-                              {metrics[metrics.length - 1]?.downloadTime || 0} ms
-                            </TableCell>
-                          </TableRow>
-                        </TableBody>
-                      </Table>
-                    </TableContainer>
-                  )}
-                </CardContent>
-              </Card>
-            </Grid>
-
-            {/* 效能統計 */}
-            <Grid item xs={12} md={6}>
-              <Card className="bg-white rounded-xl shadow-sm">
-                <CardContent>
-                  <Box display="flex" alignItems="center" gap={2} mb={3}>
-                    <Analytics className="text-green-600" />
-                    <Typography variant="h6" className="font-inter font-semibold text-neutral-800">
-                      效能統計
-                    </Typography>
-                  </Box>
-                  {stats && (
-                    <TableContainer>
-                      <Table size="small">
-                        <TableBody>
-                          <TableRow>
-                            <TableCell>平均回應時間</TableCell>
-                            <TableCell align="right">
-                              {stats.avgResponseTime} ms
-                            </TableCell>
-                          </TableRow>
-                          <TableRow>
-                            <TableCell>最小回應時間</TableCell>
-                            <TableCell align="right">
-                              {stats.minResponseTime || 0} ms
-                            </TableCell>
-                          </TableRow>
-                          <TableRow>
-                            <TableCell>最大回應時間</TableCell>
-                            <TableCell align="right">
-                              {stats.maxResponseTime} ms
-                            </TableCell>
-                          </TableRow>
-                          <TableRow>
-                            <TableCell>檢查次數</TableCell>
-                            <TableCell align="right">
-                              {stats.totalChecks || metrics.length}
-                            </TableCell>
-                          </TableRow>
-                          <TableRow>
-                            <TableCell>成功率</TableCell>
-                            <TableCell align="right">
-                              {stats.uptime}%
-                            </TableCell>
-                          </TableRow>
-                        </TableBody>
-                      </Table>
-                    </TableContainer>
-                  )}
-                </CardContent>
-              </Card>
-            </Grid>
-
-            {/* 網站配置 */}
-            <Grid item xs={12}>
-              <Card className="bg-white rounded-xl shadow-sm">
-                <CardContent>
-                  <Box display="flex" alignItems="center" gap={2} mb={3}>
-                    <Assessment className="text-purple-600" />
-                    <Typography variant="h6" className="font-inter font-semibold text-neutral-800">
-                      監控配置
-                    </Typography>
-                  </Box>
-                  <Grid container spacing={3}>
-                    <Grid item xs={12} md={6}>
-                      <Box className="space-y-3">
-                        <Box display="flex" justifyContent="space-between">
-                          <Typography variant="body2" color="textSecondary">監控間隔</Typography>
-                          <Typography variant="body2" fontWeight="medium">
-                            {website.interval} 秒
-                          </Typography>
-                        </Box>
-                        <Divider />
-                        <Box display="flex" justifyContent="space-between">
-                          <Typography variant="body2" color="textSecondary">逾時設定</Typography>
-                          <Typography variant="body2" fontWeight="medium">
-                            {website.timeout || 30} 秒
-                          </Typography>
-                        </Box>
-                        <Divider />
-                        <Box display="flex" justifyContent="space-between">
-                          <Typography variant="body2" color="textSecondary">狀態碼範圍</Typography>
-                          <Typography variant="body2" fontWeight="medium">
-                            {website.statusCodeRange.min}-{website.statusCodeRange.max}
-                          </Typography>
-                        </Box>
-                      </Box>
-                    </Grid>
-                    <Grid item xs={12} md={6}>
-                      <Box className="space-y-3">
-                        <Box display="flex" justifyContent="space-between">
-                          <Typography variant="body2" color="textSecondary">關鍵字檢查</Typography>
-                          <Typography variant="body2" fontWeight="medium">
-                            {website.keyword || '未設定'}
-                          </Typography>
-                        </Box>
-                        <Divider />
-                        <Box display="flex" justifyContent="space-between">
-                          <Typography variant="body2" color="textSecondary">建立時間</Typography>
-                          <Typography variant="body2" fontWeight="medium">
-                            {format(new Date(website.createdAt), 'yyyy/MM/dd HH:mm')}
-                          </Typography>
-                        </Box>
-                        <Divider />
-                        <Box display="flex" justifyContent="space-between">
-                          <Typography variant="body2" color="textSecondary">最後更新</Typography>
-                          <Typography variant="body2" fontWeight="medium">
-                            {format(new Date(website.updatedAt), 'yyyy/MM/dd HH:mm')}
-                          </Typography>
-                        </Box>
-                      </Box>
-                    </Grid>
-                  </Grid>
-                </CardContent>
-              </Card>
-            </Grid>
-          </Grid>
-        </Box>
-      )}
-
-      {/* Tab Panel 2: 紀錄報表 */}
-      {tabValue === 2 && (
-        <Box p={3}>
-          {/* 標題 */}
-          <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
-            <Typography variant="h6" className="font-inter font-semibold text-neutral-800">
-              監控紀錄
-            </Typography>
-            <Typography variant="body2" color="textSecondary">
-              資料範圍：{timeRanges.find(r => r.value === timeRange)?.label}
-            </Typography>
-          </Box>
-
-          {/* 監控紀錄表格 */}
-          <TableContainer component={Paper} className="shadow-sm">
-            <Table>
-              <TableHead>
-                <TableRow>
-                  <TableCell>時間</TableCell>
-                  <TableCell align="center">狀態</TableCell>
-                  <TableCell align="center">HTTP 回應碼</TableCell>
-                  <TableCell align="center">回應時間 (ms)</TableCell>
-                  <TableCell align="center">DNS (ms)</TableCell>
-                  <TableCell align="center">連線 (ms)</TableCell>
-                  <TableCell align="center">SSL (ms)</TableCell>
-                  <TableCell align="center">TTFB (ms)</TableCell>
-                  <TableCell align="center">下載 (ms)</TableCell>
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {metrics.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={9} align="center">
-                      <Box py={5}>
-                        <Typography variant="body1" color="textSecondary">
-                          暫無監控紀錄
-                        </Typography>
-                      </Box>
-                    </TableCell>
-                  </TableRow>
-                ) : (
-                  metrics
-                    .slice()
-                    .reverse()
-                    .slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage)
-                    .map((metric, index) => (
-                    <TableRow key={index} hover>
-                      <TableCell>
-                        {format(new Date(metric.time), 'yyyy/MM/dd HH:mm:ss')}
-                      </TableCell>
-                      <TableCell align="center">
-                        {metric.isHealthy ? (
-                          <Chip
-                            icon={<CheckCircle />}
-                            label="正常"
-                            color="success"
-                            size="small"
-                          />
-                        ) : (
-                          <Chip
-                            icon={<Error />}
-                            label="異常"
-                            color="error"
-                            size="small"
-                          />
-                        )}
-                      </TableCell>
-                      <TableCell align="center">
-                        <Chip
-                          label={metric.statusCode}
-                          color={metric.statusCode >= 200 && metric.statusCode < 300 ? "success" :
-                                 metric.statusCode >= 300 && metric.statusCode < 400 ? "warning" : "error"}
-                          size="small"
-                          variant="outlined"
-                        />
-                      </TableCell>
-                      <TableCell align="center">
-                        {metric.responseTime}
-                      </TableCell>
-                      <TableCell align="center">
-                        {metric.dnsTime || '-'}
-                      </TableCell>
-                      <TableCell align="center">
-                        {metric.connectTime || '-'}
-                      </TableCell>
-                      <TableCell align="center">
-                        {metric.sslHandshakeTime || '-'}
-                      </TableCell>
-                      <TableCell align="center">
-                        {metric.timeToFirstByte || '-'}
-                      </TableCell>
-                      <TableCell align="center">
-                        {metric.downloadTime || '-'}
-                      </TableCell>
-                    </TableRow>
-                  ))
-                )}
-              </TableBody>
-            </Table>
-          </TableContainer>
-
-          {/* 分頁控制 */}
-          {metrics.length > 0 && (
-            <TablePagination
-              component="div"
-              count={metrics.length}
-              page={page}
-              onPageChange={(event, newPage) => setPage(newPage)}
-              rowsPerPage={rowsPerPage}
-              onRowsPerPageChange={(event) => {
-                setRowsPerPage(parseInt(event.target.value, 10));
-                setPage(0);
-              }}
-              rowsPerPageOptions={[20, 50, 100]}
-              labelRowsPerPage="每頁顯示筆數"
-              labelDisplayedRows={({ from, to, count }) => `第 ${from}-${to} 筆，共 ${count} 筆`}
-            />
-          )}
-        </Box>
-      )}
-    </Paper>
-  </Box>
+        </CardContent>
+      </Card>
+    </Box>
   );
 };
 

@@ -18,15 +18,21 @@ class ReportService {
     try {
       return new Promise(async (resolve, reject) => {
         try {
-          const doc = new PDFDocument({ 
-            margin: 50,
+          const doc = new PDFDocument({
+            size: 'A4',  // 明確指定A4紙張
+            margins: {
+              top: 50,
+              bottom: 100,  // 大幅增加底部邊距
+              left: 50,
+              right: 50
+            },
             lineGap: 2,  // 增加行間距
             wordSpacing: 1,  // 增加字間距
             characterSpacing: 0.5,  // 增加字元間距
             autoFirstPage: false,
             bufferPages: true
           });
-          
+
           // 註冊中文字體
           const path = require('path');
           const fontPath = path.join(__dirname, '../../fonts/NotoSansTC.ttf');
@@ -38,22 +44,83 @@ class ReportService {
             console.error('Failed to load NotoSansTC font:', error.message);
             // 使用預設字體
           }
-          
-          // 添加第一頁
-          doc.addPage();
+
           const chunks = [];
-          
+
           doc.on('data', (chunk) => chunks.push(chunk));
           doc.on('end', () => resolve(Buffer.concat(chunks)));
-          
+
           const reportData = await this.generateReportData(websites, timeRange);
-          
+
+          // 在生成內容前設置頁碼和頁尾的處理
+          const pages = [];
+          const currentTime = moment().format('YYYY-MM-DD HH:mm:ss');
+
+          // 監聽pageAdded事件以追蹤頁面
+          doc.on('pageAdded', () => {
+            pages.push(true);
+          });
+
+          // 添加第一頁
+          doc.addPage();
+          pages.push(true);
+
           if (reportType === 'detailed') {
             await this.generateDetailedPDFContent(doc, websites, timeRange, reportData);
           } else {
             await this.generateSummaryPDFContent(doc, websites, timeRange, reportData);
           }
-          
+
+          // 在所有內容生成後，添加頁碼和頁尾
+          const range = doc.bufferedPageRange();
+          for (let i = range.start; i < range.start + range.count; i++) {
+            doc.switchToPage(i);
+
+            // 添加頁尾分隔線
+            doc.save();
+
+            // 使用固定的Y座標，A4紙張高度是842點
+            // 設置頁尾在更靠上的位置，確保不被內容覆蓋且在可見範圍內
+            const footerY = 730;  // 固定位置，留更多空間給頁尾
+
+            doc.moveTo(50, footerY)
+               .lineTo(doc.page.width - 50, footerY)
+               .strokeColor('#E0E0E0')
+               .lineWidth(0.5)
+               .stroke();
+
+            // 添加頁尾內容的Y位置
+            const footerTextY = footerY + 15;  // 分隔線下方15點
+
+            // 添加頁碼（右側）
+            doc.fontSize(9)
+               .fillColor('#666')
+               .text(
+                 `第 ${i + 1} 頁，共 ${range.count} 頁`,
+                 doc.page.width - 150,
+                 footerTextY,
+                 { width: 100, align: 'right' }
+               );
+
+            // 添加生成時間（左側）
+            doc.text(
+              `生成時間：${currentTime}`,
+              50,
+              footerTextY,
+              { width: 200, align: 'left' }
+            );
+
+            // 添加系統版本資訊（中間）
+            doc.text(
+              '網站監控系統 v3.2 [測試版Y730]',
+              doc.page.width / 2 - 50,
+              footerTextY,
+              { width: 100, align: 'center' }
+            );
+
+            doc.restore();
+          }
+
           doc.end();
         } catch (error) {
           reject(error);
@@ -70,11 +137,17 @@ class ReportService {
     const currentTime = moment().format('YYYY-MM-DD HH:mm:ss');
     
     // 標題
-    doc.fontSize(20).fillColor('#1976D2').text('網站監控系統報表', { 
+    doc.fontSize(20).fillColor('#1976D2').text('網站監控系統報表', {
       align: 'center',
       lineGap: 5
     });
-    doc.moveDown(1.5);
+    doc.moveDown(0.5);
+
+    // 測試標記 - 確認修改生效
+    doc.fontSize(14).fillColor('#FF0000').text('【測試v3 - 2024-09-16 13:13】', {
+      align: 'center'
+    });
+    doc.moveDown(1);
     
     // 報表資訊 - 避免使用冒號符號
     doc.fontSize(12).fillColor('#666')
@@ -106,6 +179,11 @@ class ReportService {
     
     doc.moveDown(2);
     
+    // 檢查第一頁的空間，如果不夠就換頁
+    if (doc.y > 600) {
+      doc.addPage();
+    }
+
     // 網站詳情表格
     doc.fontSize(16).fillColor('#1976D2').text('網站監控詳情');
     doc.moveDown(1);
@@ -132,8 +210,8 @@ class ReportService {
     
     // 表格內容
     reportData.websites.forEach((site, index) => {
-      // 確保有足夠的空間
-      if (doc.y > 680) {
+      // 確保有足夠的空間（調整高度閾值以避免與頁尾重疊）
+      if (doc.y > 700) {  // 頁尾在730點，所以內容不應超過700點
         doc.addPage();
         doc.fontSize(11).fillColor('#333');
       }
@@ -202,11 +280,7 @@ class ReportService {
         doc.moveDown(0.5);
       }
     });
-    
-    // 頁尾
-    doc.moveDown(2);
-    doc.fontSize(10).fillColor('#666')
-       .text('本報表由網站監控系統自動生成 | 系統版本: v3.2', { align: 'center' });
+    // 移除原本的頁尾，改由統一的頁尾處理
   }
 
   async generateDetailedPDFContent(doc, websites, timeRange, reportData) {
@@ -354,11 +428,7 @@ class ReportService {
         doc.addPage();
       }
     }
-    
-    // 頁尾
-    doc.moveDown(2);
-    doc.fontSize(10).fillColor('#666')
-       .text('本報表由網站監控系統自動生成 | 系統版本: v3.2', { align: 'center' });
+    // 移除原本的頁尾，改由統一的頁尾處理
   }
 
   async generateReportData(websites, timeRange) {

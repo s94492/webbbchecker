@@ -155,11 +155,15 @@ function calculateDowntime(unhealthyChecks, range) {
   // 根據時間範圍調整間隔估算
   switch (range) {
     case '1h': intervalMinutes = 1; break;
+    case '3h': intervalMinutes = 1; break;
     case '6h': intervalMinutes = 2; break;
     case '12h': intervalMinutes = 5; break;
     case '24h': intervalMinutes = 5; break;
-    case '1w': intervalMinutes = 30; break;
-    case '1m': intervalMinutes = 120; break;
+    case '2d': intervalMinutes = 10; break;
+    case '7d': intervalMinutes = 15; break;
+    case '14d': intervalMinutes = 30; break;
+    case '30d': intervalMinutes = 60; break;
+    case '90d': intervalMinutes = 180; break;
   }
   
   const totalDowntimeMinutes = unhealthyChecks.length * intervalMinutes;
@@ -184,7 +188,7 @@ router.get('/:websiteId', async (req, res) => {
     const { range = '1h' } = req.query;
     
     // 驗證時間範圍格式
-    const validRanges = ['1h', '6h', '12h', '24h', '1w', '1m'];
+    const validRanges = ['1h', '3h', '6h', '12h', '24h', '2d', '7d', '14d', '30d', '90d'];
     if (!validRanges.includes(range)) {
       return res.status(400).json({
         success: false,
@@ -239,7 +243,7 @@ router.get('/:websiteId/events', async (req, res) => {
     const { range = '24h' } = req.query;
     
     // 驗證時間範圍格式
-    const validRanges = ['1h', '6h', '12h', '24h', '1w', '1m'];
+    const validRanges = ['1h', '3h', '6h', '12h', '24h', '2d', '7d', '14d', '30d', '90d'];
     if (!validRanges.includes(range)) {
       return res.status(400).json({
         success: false,

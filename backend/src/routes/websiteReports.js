@@ -216,9 +216,9 @@ async function generateWebsitePDF(website, stats, metrics, timeRange) {
           {
             title: '平均響應時間',
             value: formatResponseTime(stats.avgResponseTime),
-            subtitle: stats.avgResponseTime < 500 ? '性能優秀' : stats.avgResponseTime < 1000 ? '性能良好' : '需要優化',
-            color: stats.avgResponseTime < 500 ? '#4CAF50' : stats.avgResponseTime < 1000 ? '#FF9800' : '#F44336',
-            icon: '▲'
+            subtitle: stats.avgResponseTime < 700 ? '性能優秀' : stats.avgResponseTime < 1200 ? '性能良好' : '需要關注',
+            color: stats.avgResponseTime < 1200 ? '#4CAF50' : '#FF9800',  // 綠色或橙色，不使用紅色
+            icon: stats.avgResponseTime < 700 ? '●' : stats.avgResponseTime < 1200 ? '▲' : '!'
           },
           {
             title: '監控覆蓋率',
@@ -310,10 +310,10 @@ async function generateWebsitePDF(website, stats, metrics, timeRange) {
           insightY += Math.max(textHeight + 8, 24); // 動態間距，至少24px
         });
         
-        // 頁尾資訊（調整到更安全位置）
+        // 頁尾資訊（調整到更安全位置）- 修正Y座標到750
         doc.fontSize(8).fillColor('#999')
-           .text(`報表生成時間：${currentTime}`, marginX, 700)
-           .text('第 1 頁，共 2 頁', 500, 700, { width: 50, align: 'right' });
+           .text(`報表生成時間：${currentTime} [v8.0]`, marginX, 750)  // 升級到版本號v8.0
+           .text('第 1 頁，共 2 頁', 450, 750);  // 絕對位置，不設置寬度和對齊
         
         // ========== 第2頁：性能分析 ==========
         doc.addPage();
@@ -378,12 +378,15 @@ async function generateWebsitePDF(website, stats, metrics, timeRange) {
              .text(item.status, 420, rowY, { width: 110, align: 'center', height: 16, lineGap: 0 });
         });
         
-        // 數據一致性說明
+        // 數據一致性說明 - 增加底部間距
         doc.fontSize(9).fillColor('#888')
-           .text('* 故障次數統計包含所有異常事件，可用性計算採用智能SLA邏輯過濾瞬間網絡抖動', 
+           .text('* 故障次數統計包含所有異常事件，可用性計算採用智能SLA邏輯過濾瞬間網絡抖動',
                  70, metricsDetailY + 160, { width: 460, align: 'left' });
+
+        // 加入額外空行間距
+        doc.moveDown();
       }
-      
+
       // AI 智能建議區塊
       const aiSectionY = 580;
       doc.fontSize(18).fillColor('#333')
@@ -440,13 +443,13 @@ async function generateWebsitePDF(website, stats, metrics, timeRange) {
                  });
       }
       
-      // 頁尾 - 對齊到 AI 建議框的最下方
-      const footerY = aiSectionY + 25 + 110 + 10; // AI框底部 + 10像素間距
-      
+      // 頁尾 - 統一固定在頁底（與第一頁相同位置）
+      const footerY = 750; // 統一使用固定Y座標750，貼在頁底
+
       doc.fontSize(8).fillColor('#999')
          .font('NotoSansTC')
-         .text(`報表生成時間：${currentTime}`, 65, footerY)
-         .text('第 2 頁，共 2 頁', 450, footerY, { width: 85, align: 'right' });
+         .text(`報表生成時間：${currentTime} [v8.0]`, marginX, footerY)  // 升級到版本號v8.0
+         .text('第 2 頁，共 2 頁', 450, footerY);  // 統一絕對位置，不設置寬度和對齊
       
       doc.end();
     } catch (error) {
