@@ -41,6 +41,8 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: backend
+    ports:
+      - "3001:3001"
     environment:
       - NODE_ENV=production
       - PORT=3001

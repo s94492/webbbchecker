@@ -146,7 +146,7 @@ class InfluxService {
               downloadTime: record.download_time || 0,
               transferRate: record.transfer_rate || 0,
               sslExpiryDays: record.ssl_expiry_days || 0,
-              isHealthy: record.is_healthy || false,
+              isHealthy: record.is_healthy === true || record.is_healthy === 1,
               errorMessage: record.error_message || ''
             });
           },
@@ -172,16 +172,16 @@ class InfluxService {
   aggregateData(data, range) {
     // 根據時間範圍決定聚合策略
     const aggregationConfig = {
-      '1h': 1,      // 不聚合
-      '3h': 3,      // 每3筆聚合
-      '6h': 5,      // 每5筆聚合
-      '12h': 10,    // 每10筆聚合
-      '24h': 15,    // 每15筆聚合
-      '2d': 30,     // 每30筆聚合
-      '7d': 20,     // 每20筆聚合（目標約100個點）
-      '14d': 40,    // 每40筆聚合（目標約85個點）
-      '30d': 50,    // 每50筆聚合（目標約70個點）
-      '90d': 100    // 每100筆聚合（目標約90個點）
+      '1h': 1,      // 不聚合（約12個點）
+      '3h': 2,      // 每2筆聚合（約18個點）
+      '6h': 3,      // 每3筆聚合（約24個點）
+      '12h': 4,     // 每4筆聚合（約36個點）
+      '24h': 6,     // 每6筆聚合（約48個點，每30分鐘一個點）
+      '2d': 12,     // 每12筆聚合（約48個點，每小時一個點）
+      '7d': 20,     // 每20筆聚合（約100個點）
+      '14d': 40,    // 每40筆聚合（約85個點）
+      '30d': 50,    // 每50筆聚合（約70個點）
+      '90d': 100    // 每100筆聚合（約90個點）
     };
 
     const interval = aggregationConfig[range] || 1;
@@ -207,9 +207,29 @@ class InfluxService {
           responseTime: Math.round(
             chunk.reduce((sum, d) => sum + d.responseTime, 0) / chunk.length
           ),
-          statusCode: Math.round(
-            chunk.reduce((sum, d) => sum + d.statusCode, 0) / chunk.length
-          ),
+          // 狀態碼取最常見的值（眾數）或最後一個非零值
+          statusCode: (() => {
+            const nonZeroCodes = chunk.filter(d => d.statusCode > 0).map(d => d.statusCode);
+            if (nonZeroCodes.length === 0) return 0;
+
+            // 計算眾數（最常見的狀態碼）
+            const counts = {};
+            nonZeroCodes.forEach(code => {
+              counts[code] = (counts[code] || 0) + 1;
+            });
+
+            let maxCount = 0;
+            let modeCode = nonZeroCodes[nonZeroCodes.length - 1]; // 預設取最後一個
+
+            Object.entries(counts).forEach(([code, count]) => {
+              if (count > maxCount) {
+                maxCount = count;
+                modeCode = parseInt(code);
+              }
+            });
+
+            return modeCode;
+          })(),
           dnsTime: Math.round(
             chunk.reduce((sum, d) => sum + d.dnsTime, 0) / chunk.length
           ),
@@ -246,6 +266,54 @@ class InfluxService {
     return aggregatedData;
   }
 
+  // 取得原始資料（不聚合），專門用於事件檢測
+  async getRawMetrics(websiteId, range = '1h') {
+    try {
+      const query = `
+        from(bucket: "${this.bucket}")
+          |> range(start: -${range})
+          |> filter(fn: (r) => r._measurement == "website_metrics")
+          |> filter(fn: (r) => r.website_id == "${websiteId}")
+          |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
+          |> sort(columns: ["_time"])
+      `;
+
+      const rows = [];
+      return new Promise((resolve, reject) => {
+        this.queryApi.queryRows(query, {
+          next: (row, tableMeta) => {
+            const record = tableMeta.toObject(row);
+            rows.push({
+              time: record._time,
+              responseTime: record.response_time || 0,
+              statusCode: record.status_code || 0,
+              dnsTime: record.dns_time || 0,
+              connectTime: record.connect_time || 0,
+              sslHandshakeTime: record.ssl_handshake_time || 0,
+              timeToFirstByte: record.time_to_first_byte || 0,
+              downloadTime: record.download_time || 0,
+              transferRate: record.transfer_rate || 0,
+              sslExpiryDays: record.ssl_expiry_days || 0,
+              isHealthy: record.is_healthy === true || record.is_healthy === 1,
+              errorMessage: record.error_message || ''
+            });
+          },
+          error: (error) => {
+            console.error('查詢原始 InfluxDB 資料失敗:', error);
+            reject(error);
+          },
+          complete: () => {
+            console.log(`取得 ${websiteId} 的 ${rows.length} 筆原始記錄 (時間範圍: ${range})`);
+            resolve(rows);
+          }
+        });
+      });
+    } catch (error) {
+      console.error('查詢原始 InfluxDB 資料失敗:', error);
+      throw error;
+    }
+  }
+
   async getLatestMetrics(websiteId) {
     try {
       const query = `
@@ -274,7 +342,7 @@ class InfluxService {
               downloadTime: record.download_time || 0,
               transferRate: record.transfer_rate || 0,
               sslExpiryDays: record.ssl_expiry_days || 0,
-              isHealthy: record.is_healthy || false,
+              isHealthy: record.is_healthy === true || record.is_healthy === 1,
               errorMessage: record.error_message || ''
             });
           },

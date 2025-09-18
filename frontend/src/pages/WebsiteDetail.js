@@ -195,6 +195,8 @@ const WebsiteDetail = () => {
   };
 
   const formatMetricsData = (metrics) => {
+    if (!metrics || metrics.length === 0) return [];
+
     // 根據時間範圍決定時間格式
     const getTimeFormat = () => {
       switch(timeRange) {
@@ -203,16 +205,17 @@ const WebsiteDetail = () => {
         case '6h':
           return 'HH:mm'; // 小時範圍顯示時:分
         case '12h':
+          return 'HH:mm'; // 12小時也只顯示時:分
         case '24h':
-          return 'MM/dd HH:mm'; // 天內範圍顯示月/日 時:分
+          return 'HH:mm'; // 24小時只顯示時:分，避免擁擠
         case '2d':
+          return 'MM/dd HH時'; // 2天顯示月/日 時
         case '7d':
-          return 'MM/dd HH時'; // 多天範圍顯示月/日 時
+          return 'MM/dd'; // 7天只顯示月/日
         case '14d':
         case '30d':
-          return 'MM/dd'; // 長時間範圍只顯示月/日
         case '90d':
-          return 'MM/dd'; // 90天也只顯示月/日
+          return 'MM/dd'; // 長時間範圍只顯示月/日
         default:
           return 'HH:mm';
       }
@@ -220,12 +223,145 @@ const WebsiteDetail = () => {
 
     const timeFormat = getTimeFormat();
 
-    // 決定是否需要減少顯示的資料點（用於 X 軸標籤）
-    const shouldReduceLabels = ['7d', '14d', '30d', '90d'].includes(timeRange);
+    // 對於 24 小時範圍，生成整點資料
+    if (timeRange === '24h' && metrics.length > 0) {
+      // 固定使用最近 24 小時的時間範圍
+      const now = new Date();
+      const twentyFourHoursAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
 
-    return metrics.map((metric, index) => ({
-      // 對於長時間範圍，減少 X 軸標籤密度
-      time: shouldReduceLabels && index % 2 !== 0 ? '' : format(new Date(metric.time), timeFormat),
+      // 生成整點時間序列
+      const hourlyData = [];
+      const currentHour = new Date(twentyFourHoursAgo);
+      currentHour.setMinutes(0, 0, 0);
+
+      const endTime = new Date(now);
+      endTime.setMinutes(59, 59, 999);
+
+      // 建立原始資料的時間索引，方便查找
+      const metricsMap = new Map();
+      metrics.forEach(m => {
+        metricsMap.set(new Date(m.time).getTime(), m);
+      });
+
+      while (currentHour <= endTime) {
+        const hourTime = new Date(currentHour);
+        const hourTimeMs = hourTime.getTime();
+
+        // 找到最接近這個整點的前後資料點
+        let prevMetric = null;
+        let nextMetric = null;
+        let closestMetric = null;
+        let minDiff = Infinity;
+
+        for (const metric of metrics) {
+          const metricTime = new Date(metric.time).getTime();
+          const diff = Math.abs(metricTime - hourTimeMs);
+
+          // 找最接近的點
+          if (diff < minDiff) {
+            minDiff = diff;
+            closestMetric = metric;
+          }
+
+          // 找前後點用於插值
+          if (metricTime <= hourTimeMs) {
+            prevMetric = metric;
+          }
+          if (metricTime >= hourTimeMs && !nextMetric) {
+            nextMetric = metric;
+          }
+        }
+
+        // 如果找不到任何資料點，跳過這個整點
+        if (!closestMetric) {
+          currentHour.setHours(currentHour.getHours() + 1);
+          continue;
+        }
+
+        // 如果最近的資料點在 30 分鐘內，直接使用它的值
+        if (minDiff <= 30 * 60 * 1000) {
+          hourlyData.push({
+            time: format(hourTime, 'MM/dd HH:00'),
+            fullTime: format(hourTime, 'yyyy/MM/dd HH:mm:ss'),
+            responseTime: closestMetric.responseTime,
+            statusCode: closestMetric.statusCode,
+            dnsTime: closestMetric.dnsTime,
+            connectTime: closestMetric.connectTime || 0,
+            sslHandshakeTime: closestMetric.sslHandshakeTime || 0,
+            timeToFirstByte: closestMetric.timeToFirstByte || 0,
+            downloadTime: closestMetric.downloadTime || 0,
+            transferRate: closestMetric.transferRate,
+            isHealthy: closestMetric.isHealthy
+          });
+        }
+        // 否則進行線性插值（只在前後點時間差不超過 2 小時時）
+        else if (prevMetric && nextMetric) {
+          const prevTime = new Date(prevMetric.time).getTime();
+          const nextTime = new Date(nextMetric.time).getTime();
+          const timeDiff = nextTime - prevTime;
+
+          // 只有當前後點時間差不超過 2 小時時才插值
+          if (timeDiff <= 2 * 60 * 60 * 1000) {
+            const ratio = (hourTimeMs - prevTime) / timeDiff;
+
+            hourlyData.push({
+              time: format(hourTime, 'MM/dd HH:00'),
+              fullTime: format(hourTime, 'yyyy/MM/dd HH:mm:ss'),
+              responseTime: Math.round(prevMetric.responseTime + (nextMetric.responseTime - prevMetric.responseTime) * ratio),
+              statusCode: prevMetric.statusCode, // 狀態碼使用前一個值
+              dnsTime: Math.round(prevMetric.dnsTime + (nextMetric.dnsTime - prevMetric.dnsTime) * ratio),
+              connectTime: Math.round((prevMetric.connectTime || 0) + ((nextMetric.connectTime || 0) - (prevMetric.connectTime || 0)) * ratio),
+              sslHandshakeTime: Math.round((prevMetric.sslHandshakeTime || 0) + ((nextMetric.sslHandshakeTime || 0) - (prevMetric.sslHandshakeTime || 0)) * ratio),
+              timeToFirstByte: Math.round((prevMetric.timeToFirstByte || 0) + ((nextMetric.timeToFirstByte || 0) - (prevMetric.timeToFirstByte || 0)) * ratio),
+              downloadTime: Math.round((prevMetric.downloadTime || 0) + ((nextMetric.downloadTime || 0) - (prevMetric.downloadTime || 0)) * ratio),
+              transferRate: prevMetric.transferRate,
+              isHealthy: prevMetric.isHealthy && nextMetric.isHealthy
+            });
+          }
+          // 如果時間差太大，但有接近的點，使用最接近的點（在 1 小時內）
+          else if (minDiff <= 60 * 60 * 1000) {
+            hourlyData.push({
+              time: format(hourTime, 'MM/dd HH:00'),
+              fullTime: format(hourTime, 'yyyy/MM/dd HH:mm:ss'),
+              responseTime: closestMetric.responseTime,
+              statusCode: closestMetric.statusCode,
+              dnsTime: closestMetric.dnsTime,
+              connectTime: closestMetric.connectTime || 0,
+              sslHandshakeTime: closestMetric.sslHandshakeTime || 0,
+              timeToFirstByte: closestMetric.timeToFirstByte || 0,
+              downloadTime: closestMetric.downloadTime || 0,
+              transferRate: closestMetric.transferRate,
+              isHealthy: closestMetric.isHealthy
+            });
+          }
+        }
+        // 如果只有前點或後點，且距離不太遠（1 小時內），使用最接近的點
+        else if (closestMetric && minDiff <= 60 * 60 * 1000) {
+          hourlyData.push({
+            time: format(hourTime, 'MM/dd HH:00'),
+            fullTime: format(hourTime, 'yyyy/MM/dd HH:mm:ss'),
+            responseTime: closestMetric.responseTime,
+            statusCode: closestMetric.statusCode,
+            dnsTime: closestMetric.dnsTime,
+            connectTime: closestMetric.connectTime || 0,
+            sslHandshakeTime: closestMetric.sslHandshakeTime || 0,
+            timeToFirstByte: closestMetric.timeToFirstByte || 0,
+            downloadTime: closestMetric.downloadTime || 0,
+            transferRate: closestMetric.transferRate,
+            isHealthy: closestMetric.isHealthy
+          });
+        }
+
+        // 移到下一個整點
+        currentHour.setHours(currentHour.getHours() + 1);
+      }
+
+      return hourlyData;
+    }
+
+    // 其他時間範圍保持原樣
+    return metrics.map((metric) => ({
+      time: format(new Date(metric.time), timeFormat),
       fullTime: format(new Date(metric.time), 'yyyy/MM/dd HH:mm:ss'),
       responseTime: metric.responseTime,
       statusCode: metric.statusCode,
@@ -462,9 +598,17 @@ const WebsiteDetail = () => {
               <Grid item xs={12}>
                 <Card className="bg-white rounded-xl shadow-sm">
           <CardContent>
-            <Typography variant="h6" className="font-inter font-semibold text-neutral-800 mb-4">
-              {timeRanges.find(r => r.value === timeRange)?.label} 統計摘要
-            </Typography>
+            <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
+              <Typography variant="h6" className="font-inter font-semibold text-neutral-800">
+                {timeRanges.find(r => r.value === timeRange)?.label} 統計摘要
+              </Typography>
+              {stats.actualDataRange && (
+                <Typography variant="caption" className="text-amber-700 bg-amber-50 px-2 py-1 rounded">
+                  實際資料: {stats.actualDataRange.startDate} ~ {stats.actualDataRange.endDate}
+                  ({stats.actualDataRange.days}天)
+                </Typography>
+              )}
+            </Box>
             <Grid container spacing={3}>
               <Grid item xs={12} sm={6} md={3}>
                 <Paper className="bg-blue-50 p-4 rounded-lg">
@@ -540,9 +684,12 @@ const WebsiteDetail = () => {
               </Grid>
             )}
 
-            {/* 異常事件時間線 */}
+            {/* 異常事件時間線 - 只顯示最新 10 筆 */}
             <Grid item xs={12}>
-              <EventTimeline events={events} loading={loading} />
+              <EventTimeline
+                events={events.slice(-10)}
+                loading={loading}
+              />
             </Grid>
 
             {/* 時間範圍選擇器與圖表 */}

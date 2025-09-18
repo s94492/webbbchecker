@@ -2,16 +2,20 @@ const PDFDocument = require('pdfkit');
 const path = require('path');
 const moment = require('moment');
 const { InfluxDB } = require('@influxdata/influxdb-client');
+const InfluxService = require('./InfluxService');
 
 class ReportService {
   constructor() {
     // 使用環境變數，提供預設值
     const influxUrl = process.env.INFLUXDB_URL || process.env.INFLUX_URL || 'http://influxdb:8086';
     const influxToken = process.env.INFLUXDB_TOKEN || process.env.INFLUX_TOKEN || 'mytoken';
-    
+
     this.influxdb = new InfluxDB({ url: influxUrl, token: influxToken });
     this.org = process.env.INFLUXDB_ORG || process.env.INFLUX_ORG || 'myorg';
     this.bucket = process.env.INFLUXDB_BUCKET || process.env.INFLUX_BUCKET || 'website-monitor';
+
+    // 初始化 InfluxService 實例
+    this.influxService = new InfluxService();
   }
 
   async generatePDFReport(websites, timeRange = '24h', reportType = 'summary') {
@@ -598,10 +602,15 @@ class ReportService {
   getInfluxTimeRange(timeRange) {
     switch (timeRange) {
       case '1h': return '-1h';
+      case '3h': return '-3h';
       case '6h': return '-6h';
+      case '12h': return '-12h';
       case '24h': return '-24h';
+      case '2d': return '-2d';
       case '7d': return '-7d';
+      case '14d': return '-14d';
       case '30d': return '-30d';
+      case '90d': return '-90d';
       default: return '-24h';
     }
   }
@@ -609,10 +618,15 @@ class ReportService {
   getTimeRangeText(timeRange) {
     switch (timeRange) {
       case '1h': return '過去1小時';
+      case '3h': return '過去3小時';
       case '6h': return '過去6小時';
+      case '12h': return '過去12小時';
       case '24h': return '過去24小時';
+      case '2d': return '過去2天';
       case '7d': return '過去7天';
+      case '14d': return '過去14天';
       case '30d': return '過去30天';
+      case '90d': return '過去90天';
       default: return '過去24小時';
     }
   }
@@ -761,8 +775,60 @@ class ReportService {
   getTimePeriods(timeRange) {
     const now = moment();
     const periods = [];
-    
+
     switch(timeRange) {
+      case '1h':
+        // 將1小時分為6個10分鐘段
+        for (let i = 5; i >= 0; i--) {
+          const start = moment().subtract(i * 10 + 10, 'minutes');
+          const end = moment().subtract(i * 10, 'minutes');
+          periods.push({
+            label: `${start.format('HH:mm')}-${end.format('HH:mm')}`,
+            start: start.toISOString(),
+            end: end.toISOString(),
+            range: '10m'
+          });
+        }
+        break;
+      case '3h':
+        // 將3小時分為6個30分鐘段
+        for (let i = 5; i >= 0; i--) {
+          const start = moment().subtract(i * 30 + 30, 'minutes');
+          const end = moment().subtract(i * 30, 'minutes');
+          periods.push({
+            label: `${start.format('HH:mm')}-${end.format('HH:mm')}`,
+            start: start.toISOString(),
+            end: end.toISOString(),
+            range: '30m'
+          });
+        }
+        break;
+      case '6h':
+        // 將6小時分為6個1小時段
+        for (let i = 5; i >= 0; i--) {
+          const start = moment().subtract(i + 1, 'hours');
+          const end = moment().subtract(i, 'hours');
+          periods.push({
+            label: `${start.format('HH:mm')}-${end.format('HH:mm')}`,
+            start: start.toISOString(),
+            end: end.toISOString(),
+            range: '1h'
+          });
+        }
+        break;
+      case '12h':
+        // 將12小時分為6個2小時段
+        for (let i = 5; i >= 0; i--) {
+          const start = moment().subtract(i * 2 + 2, 'hours');
+          const end = moment().subtract(i * 2, 'hours');
+          periods.push({
+            label: `${start.format('HH:mm')}-${end.format('HH:mm')}`,
+            start: start.toISOString(),
+            end: end.toISOString(),
+            range: '2h'
+          });
+        }
+        break;
       case '24h':
         // 將24小時分為6個4小時段
         for (let i = 5; i >= 0; i--) {
@@ -771,7 +837,21 @@ class ReportService {
           periods.push({
             label: `${start.format('HH:mm')}-${end.format('HH:mm')}`,
             start: start.toISOString(),
-            end: end.toISOString()
+            end: end.toISOString(),
+            range: '4h'
+          });
+        }
+        break;
+      case '2d':
+        // 將2天分為6個8小時段
+        for (let i = 5; i >= 0; i--) {
+          const start = moment().subtract(i * 8 + 8, 'hours');
+          const end = moment().subtract(i * 8, 'hours');
+          periods.push({
+            label: `${start.format('MM/DD HH時')}`,
+            start: start.toISOString(),
+            end: end.toISOString(),
+            range: '8h'
           });
         }
         break;
@@ -782,35 +862,111 @@ class ReportService {
           periods.push({
             label: date.format('MM/DD'),
             start: date.startOf('day').toISOString(),
-            end: date.endOf('day').toISOString()
+            end: date.endOf('day').toISOString(),
+            range: '1d'
+          });
+        }
+        break;
+      case '14d':
+        // 將14天分為7個2天段
+        for (let i = 6; i >= 0; i--) {
+          const start = moment().subtract(i * 2 + 2, 'days');
+          const end = moment().subtract(i * 2, 'days');
+          periods.push({
+            label: `${start.format('MM/DD')}-${end.format('MM/DD')}`,
+            start: start.toISOString(),
+            end: end.toISOString(),
+            range: '2d'
+          });
+        }
+        break;
+      case '30d':
+        // 將30天分為6個5天段
+        for (let i = 5; i >= 0; i--) {
+          const start = moment().subtract(i * 5 + 5, 'days');
+          const end = moment().subtract(i * 5, 'days');
+          periods.push({
+            label: `${start.format('MM/DD')}-${end.format('MM/DD')}`,
+            start: start.toISOString(),
+            end: end.toISOString(),
+            range: '5d'
+          });
+        }
+        break;
+      case '90d':
+        // 將90天分為6個15天段
+        for (let i = 5; i >= 0; i--) {
+          const start = moment().subtract(i * 15 + 15, 'days');
+          const end = moment().subtract(i * 15, 'days');
+          periods.push({
+            label: `${start.format('MM/DD')}-${end.format('MM/DD')}`,
+            start: start.toISOString(),
+            end: end.toISOString(),
+            range: '15d'
           });
         }
         break;
       default:
-        // 預設使用最近6小時，每小時一個點
+        // 預設使用最近24小時
         for (let i = 5; i >= 0; i--) {
-          const start = moment().subtract(i + 1, 'hours');
-          const end = moment().subtract(i, 'hours');
+          const start = moment().subtract(i * 4 + 4, 'hours');
+          const end = moment().subtract(i * 4, 'hours');
           periods.push({
-            label: end.format('HH:mm'),
+            label: `${start.format('HH:mm')}-${end.format('HH:mm')}`,
             start: start.toISOString(),
-            end: end.toISOString()
+            end: end.toISOString(),
+            range: '4h'
           });
         }
     }
-    
+
     return periods;
   }
   
   // 獲取特定時段的指標
   async getPeriodMetrics(websites, period) {
-    // 模擬數據，實際應從InfluxDB查詢
-    // 在實際應用中，這裡應該查詢每個網站在特定時段的實際數據
+    // 從 InfluxDB 查詢實際數據
+    let totalResponseTime = 0;
+    let maxResponseTime = 0;
+    let totalChecks = 0;
+    let successfulChecks = 0;
+    let websiteCount = 0;
+
+    for (const website of websites) {
+      try {
+        // 使用 InfluxService 查詢指定時間範圍的數據
+        const metrics = await this.influxService.getMetrics(website.id, period.range || '1h');
+
+        if (metrics && metrics.length > 0) {
+          websiteCount++;
+
+          // 計算該網站的統計數據
+          const websiteResponseTimes = metrics.map(m => m.responseTime).filter(rt => rt > 0);
+          const websiteSuccessCount = metrics.filter(m => m.isHealthy).length;
+
+          if (websiteResponseTimes.length > 0) {
+            // 累加總和
+            totalResponseTime += websiteResponseTimes.reduce((sum, rt) => sum + rt, 0) / websiteResponseTimes.length;
+            maxResponseTime = Math.max(maxResponseTime, Math.max(...websiteResponseTimes));
+          }
+
+          totalChecks += metrics.length;
+          successfulChecks += websiteSuccessCount;
+        }
+      } catch (error) {
+        console.error(`獲取網站 ${website.id} 的指標失敗:`, error);
+      }
+    }
+
+    // 計算平均值
+    const avgResponseTime = websiteCount > 0 ? totalResponseTime / websiteCount : 0;
+    const uptime = totalChecks > 0 ? (successfulChecks / totalChecks) * 100 : 0;
+
     return {
-      avgResponseTime: 200 + Math.random() * 300,
-      maxResponseTime: 500 + Math.random() * 500,
-      uptime: 95 + Math.random() * 5,
-      checkCount: Math.floor(50 + Math.random() * 50)
+      avgResponseTime: Math.round(avgResponseTime),
+      maxResponseTime: Math.round(maxResponseTime),
+      uptime: parseFloat(uptime.toFixed(1)),
+      checkCount: totalChecks
     };
   }
 }

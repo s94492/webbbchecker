@@ -143,15 +143,99 @@ router.get('/retention-info', async (req, res) => {
   }
 });
 
-// 計算停機時間
+// 計算停機時間（基於事件的實際持續時間）
+async function calculateDowntimeFromEvents(websiteId, range, influxService) {
+  try {
+    // 取得原始數據來檢測事件
+    const metrics = await influxService.getRawMetrics(websiteId, range);
+
+    if (metrics.length === 0) {
+      return '0m';
+    }
+
+    // 確保數據按時間順序排序（從舊到新）
+    metrics.sort((a, b) => new Date(a.time) - new Date(b.time));
+
+
+    let totalDowntimeMs = 0;
+    let currentOutageStart = null;
+    let downtimePeriods = [];
+
+    // 遍歷所有指標，計算停機時間
+    for (let i = 0; i < metrics.length; i++) {
+      const metric = metrics[i];
+      const isHealthy = metric.isHealthy;
+
+      if (!isHealthy && !currentOutageStart) {
+        // 開始新的停機期間
+        currentOutageStart = new Date(metric.time);
+      } else if (isHealthy && currentOutageStart) {
+        // 結束當前的停機期間
+        const outageEnd = new Date(metric.time);
+        const durationMs = outageEnd - currentOutageStart;
+        totalDowntimeMs += durationMs;
+
+        // 記錄停機期間詳情（用於調試）
+        downtimePeriods.push({
+          start: currentOutageStart.toISOString(),
+          end: outageEnd.toISOString(),
+          durationMinutes: Math.round(durationMs / 60000)
+        });
+
+        currentOutageStart = null;
+      }
+    }
+
+    // 如果最後是停機狀態，計算到現在的時間
+    if (currentOutageStart) {
+      const now = new Date();
+      const lastMetricTime = new Date(metrics[metrics.length - 1].time);
+      // 使用最後一個指標時間或現在時間（取較早的）
+      const endTime = lastMetricTime < now ? now : lastMetricTime;
+      const durationMs = endTime - currentOutageStart;
+      totalDowntimeMs += durationMs;
+
+      downtimePeriods.push({
+        start: currentOutageStart.toISOString(),
+        end: endTime.toISOString(),
+        durationMinutes: Math.round(durationMs / 60000),
+        ongoing: true
+      });
+    }
+
+
+    // 轉換為分鐘
+    const totalDowntimeMinutes = Math.round(totalDowntimeMs / 60000);
+
+    if (totalDowntimeMinutes === 0) {
+      return '0m';
+    }
+    if (totalDowntimeMinutes < 60) {
+      return `${totalDowntimeMinutes}m`;
+    } else if (totalDowntimeMinutes < 1440) {
+      const hours = Math.floor(totalDowntimeMinutes / 60);
+      const minutes = totalDowntimeMinutes % 60;
+      return minutes > 0 ? `${hours}h${minutes}m` : `${hours}h`;
+    } else {
+      const days = Math.floor(totalDowntimeMinutes / 1440);
+      const hours = Math.floor((totalDowntimeMinutes % 1440) / 60);
+      return hours > 0 ? `${days}d${hours}h` : `${days}d`;
+    }
+  } catch (error) {
+    console.error('計算停機時間失敗:', error);
+    return '0m';
+  }
+}
+
+// 舊版計算停機時間（保留作為備用）
 function calculateDowntime(unhealthyChecks, range) {
   if (unhealthyChecks.length === 0) {
     return '0m';
   }
-  
+
   // 估算停機時間（假設每次檢查代表一個時間間隔）
   let intervalMinutes = 1; // 預設1分鐘間隔
-  
+
   // 根據時間範圍調整間隔估算
   switch (range) {
     case '1h': intervalMinutes = 1; break;
@@ -165,9 +249,9 @@ function calculateDowntime(unhealthyChecks, range) {
     case '30d': intervalMinutes = 60; break;
     case '90d': intervalMinutes = 180; break;
   }
-  
+
   const totalDowntimeMinutes = unhealthyChecks.length * intervalMinutes;
-  
+
   if (totalDowntimeMinutes < 60) {
     return `${totalDowntimeMinutes}m`;
   } else if (totalDowntimeMinutes < 1440) {
@@ -241,7 +325,7 @@ router.get('/:websiteId/events', async (req, res) => {
   try {
     const { websiteId } = req.params;
     const { range = '24h' } = req.query;
-    
+
     // 驗證時間範圍格式
     const validRanges = ['1h', '3h', '6h', '12h', '24h', '2d', '7d', '14d', '30d', '90d'];
     if (!validRanges.includes(range)) {
@@ -251,29 +335,57 @@ router.get('/:websiteId/events', async (req, res) => {
         validRanges
       });
     }
-    
-    const metrics = await influxService.getMetrics(websiteId, range);
-    
+
+    // 取得網站設定以獲取 statusCodeRange
+    const websiteStorage = req.app.locals.websiteStorage;
+    const website = await websiteStorage.getById(websiteId);
+
+    if (!website) {
+      return res.status(404).json({
+        success: false,
+        error: '找不到指定網站'
+      });
+    }
+
+    // 使用原始資料來檢測事件，避免聚合造成的時間錯亂
+    const metrics = await influxService.getRawMetrics(websiteId, range);
+
     // 找出異常事件（狀態變化點）
     const events = [];
     let previousStatus = null;
-    
+
     for (let i = 0; i < metrics.length; i++) {
       const metric = metrics[i];
       const currentStatus = metric.isHealthy ? 'healthy' : 'unhealthy';
-      
+
       // 如果狀態發生變化，記錄事件
       if (previousStatus !== null && previousStatus !== currentStatus) {
         const eventType = currentStatus === 'healthy' ? 'recovery' : 'outage';
-        const severity = currentStatus === 'healthy' ? 'info' : 'error';
-        
+
+        // 根據網站設定的狀態碼範圍判斷嚴重性
+        let severity = 'info';
+        if (currentStatus !== 'healthy') {
+          const { min, max } = website.statusCodeRange || { min: 200, max: 299 };
+
+          // 只有當狀態不健康時才判斷嚴重性
+          if (metric.statusCode >= min && metric.statusCode <= max) {
+            severity = 'warning'; // 在接受範圍內但其他檢查失敗（如關鍵字、SSL）
+          } else if (metric.statusCode >= 500) {
+            severity = 'error'; // 5xx 伺服器錯誤
+          } else if (metric.statusCode >= 400) {
+            severity = 'warning'; // 4xx 客戶端錯誤
+          } else {
+            severity = 'warning'; // 3xx 或其他
+          }
+        }
+
         events.push({
           id: `${websiteId}-${metric.time}`,
           time: metric.time,
           type: eventType,
           severity,
           title: eventType === 'recovery' ? '服務恢復' : '服務異常',
-          description: eventType === 'recovery' 
+          description: eventType === 'recovery'
             ? `服務已恢復正常，回應時間 ${metric.responseTime}ms`
             : `服務發生異常，狀態碼 ${metric.statusCode}，回應時間 ${metric.responseTime}ms`,
           statusCode: metric.statusCode,
@@ -377,24 +489,46 @@ router.get('/:websiteId/stats', async (req, res) => {
     const monitoringInterval = website.interval || 300; // 使用網站設定的監控間隔（秒）
     const { realOutages, filteredSuccessfulChecks } = calculateSmartSLA(activeMetrics, monitoringInterval);
     const successfulChecks = filteredSuccessfulChecks;
-    
+
     // 計算停機時間（僅基於真實故障）
     const unhealthyChecks = realOutages;
-    const downtime = calculateDowntime(unhealthyChecks, range);
+
+    // 計算實際的資料時間範圍
+    let actualDataInfo = null;
+    if (activeMetrics.length > 0) {
+      const firstTime = new Date(activeMetrics[0].time);
+      const lastTime = new Date(activeMetrics[activeMetrics.length - 1].time);
+      const actualHours = (lastTime - firstTime) / (1000 * 60 * 60);
+      actualDataInfo = {
+        startTime: firstTime,
+        endTime: lastTime,
+        totalHours: actualHours,
+        totalDays: Math.ceil(actualHours / 24)
+      };
+    }
+
+    // 使用基於事件的實際停機時間計算
+    const downtime = await calculateDowntimeFromEvents(websiteId, range, influxService);
     
     const stats = {
       count: activeMetrics.length,
-      avgResponseTime: responseTimes.length > 0 ? 
+      avgResponseTime: responseTimes.length > 0 ?
         Math.round(responseTimes.reduce((a, b) => a + b, 0) / responseTimes.length) : 0,
       minResponseTime: responseTimes.length > 0 ? Math.min(...responseTimes) : 0,
       maxResponseTime: responseTimes.length > 0 ? Math.max(...responseTimes) : 0,
-      uptime: activeMetrics.length > 0 ? 
+      uptime: activeMetrics.length > 0 ?
         Math.round((successfulChecks / activeMetrics.length) * 100 * 100) / 100 : 100,
       downtime: downtime,
       successfulChecks,
       isPaused: false,
       excludedCount: allMetrics.length - activeMetrics.length, // 被排除的記錄數
-      range
+      range,
+      actualDataRange: actualDataInfo ? {
+        startDate: actualDataInfo.startTime.toISOString().split('T')[0],
+        endDate: actualDataInfo.endTime.toISOString().split('T')[0],
+        days: actualDataInfo.totalDays,
+        hours: Math.round(actualDataInfo.totalHours)
+      } : null
     };
     
     res.json({

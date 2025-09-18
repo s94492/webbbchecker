@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { Fragment } from 'react';
 import {
   Card,
   CardContent,
@@ -6,6 +6,12 @@ import {
   Box,
   Chip,
   Alert,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
   Paper
 } from '@mui/material';
 import {
@@ -18,50 +24,113 @@ import { format, formatDistanceToNow } from 'date-fns';
 import { zhTW } from 'date-fns/locale';
 
 const EventTimeline = ({ events, loading = false }) => {
-  const getEventIcon = (type, severity) => {
-    if (type === 'recovery') {
-      return <CheckCircle sx={{ color: 'white' }} />;
-    } else if (severity === 'error') {
-      return <Error sx={{ color: 'white' }} />;
+  // 將事件配對成異常-恢復組
+  const pairEvents = (eventList) => {
+    const pairs = [];
+    let i = 0;
+
+    while (i < eventList.length) {
+      const event = eventList[i];
+
+      if (event.type === 'recovery') {
+        // 恢復事件在前，找下一個異常事件
+        const nextEvent = i + 1 < eventList.length ? eventList[i + 1] : null;
+        if (nextEvent && nextEvent.type === 'outage') {
+          // 這是一對完整的事件（恢復在前，異常在後表示時間倒序）
+          pairs.push({ outage: nextEvent, recovery: event });
+          i += 2;
+        } else {
+          // 單獨的恢復事件
+          pairs.push({ outage: null, recovery: event });
+          i += 1;
+        }
+      } else if (event.type === 'outage') {
+        // 異常事件，檢查是否有對應的恢復
+        const nextEvent = i + 1 < eventList.length ? eventList[i + 1] : null;
+        if (nextEvent && nextEvent.type === 'recovery') {
+          pairs.push({ outage: event, recovery: nextEvent });
+          i += 2;
+        } else {
+          // 進行中的異常
+          pairs.push({ outage: event, recovery: null });
+          i += 1;
+        }
+      } else {
+        i += 1;
+      }
+    }
+
+    return pairs;
+  };
+
+  const getStatusIcon = (status) => {
+    if (status === 'recovered') {
+      return <CheckCircle sx={{ color: '#22c55e', fontSize: 18 }} />;
+    } else if (status === 'ongoing') {
+      return <Warning sx={{ color: '#f59e0b', fontSize: 18 }} />;
     } else {
-      return <Warning sx={{ color: 'white' }} />;
+      return <Error sx={{ color: '#ef4444', fontSize: 18 }} />;
     }
   };
 
-  const getEventColor = (type, severity) => {
-    if (type === 'recovery') {
-      return 'success.main';
-    } else if (severity === 'error') {
-      return 'error.main';
-    } else {
-      return 'warning.main';
-    }
+  // 格式化簡短時間
+  const formatShortTime = (date) => {
+    return format(new Date(date), 'yyyy-MM-dd HH:mm');
   };
 
-  const getSeverityChip = (severity, type) => {
-    const config = {
-      error: { label: '嚴重', color: 'error' },
-      warning: { label: '警告', color: 'warning' },
-      info: { label: '正常', color: 'success' }
-    };
-    
-    if (type === 'recovery') {
-      return <Chip label="恢復" color="success" size="small" />;
+  // 計算持續時間
+  const calculateDuration = (pair) => {
+    if (pair.outage && pair.recovery) {
+      const start = new Date(pair.outage.time);
+      const end = new Date(pair.recovery.time);
+      const diffMs = end - start;
+      const diffMins = Math.floor(diffMs / 60000);
+
+      if (diffMins < 1) return '< 1分鐘';
+      if (diffMins < 60) return `${diffMins}分鐘`;
+
+      const hours = Math.floor(diffMins / 60);
+      const mins = diffMins % 60;
+      return mins > 0 ? `${hours}小時${mins}分鐘` : `${hours}小時`;
     }
-    
-    const chipConfig = config[severity] || { label: '未知', color: 'default' };
-    return <Chip label={chipConfig.label} color={chipConfig.color} size="small" />;
+    // 進行中的異常，計算從開始到現在的時間
+    if (pair.outage) {
+      const start = new Date(pair.outage.time);
+      const now = new Date();
+      const diffMs = now - start;
+      const diffMins = Math.floor(diffMs / 60000);
+
+      if (diffMins < 1) return '< 1分鐘';
+      if (diffMins < 60) return `${diffMins}分鐘`;
+
+      const hours = Math.floor(diffMins / 60);
+      const mins = diffMins % 60;
+      return mins > 0 ? `${hours}小時${mins}分鐘` : `${hours}小時`;
+    }
+    return '';
   };
 
-  const formatEventTime = (time) => {
-    const eventDate = new Date(time);
-    const timeString = format(eventDate, 'HH:mm:ss');
-    const relativeTime = formatDistanceToNow(eventDate, { 
-      addSuffix: true, 
-      locale: zhTW 
-    });
-    
-    return { timeString, relativeTime };
+  // 決定顯示的錯誤原因
+  const getReason = (pair) => {
+    if (pair.outage) {
+      // 檢查描述中是否包含關鍵字相關資訊
+      const desc = pair.outage.description || '';
+      if (desc.includes('關鍵字') || desc.includes('keyword')) {
+        return '關鍵字不匹配';
+      }
+
+      if (pair.outage.statusCode === 0) return '連線逾時';
+      if (pair.outage.statusCode >= 500) return `伺服器錯誤 (${pair.outage.statusCode})`;
+      if (pair.outage.statusCode >= 400) return `HTTP ${pair.outage.statusCode}`;
+
+      // 狀態碼正常但仍異常的情況（可能是關鍵字不匹配）
+      if (pair.outage.statusCode >= 200 && pair.outage.statusCode < 300) {
+        return '關鍵字不匹配';
+      }
+
+      return `HTTP ${pair.outage.statusCode}`;
+    }
+    return '未知';
   };
 
   if (loading) {
@@ -102,104 +171,107 @@ const EventTimeline = ({ events, loading = false }) => {
     );
   }
 
+  const pairedEvents = pairEvents(events.slice(0, 20)).slice(0, 10);
+
   return (
     <Card className="bg-white rounded-xl shadow-sm">
       <CardContent>
-        <Box display="flex" alignItems="center" justify="space-between" mb={3}>
+        <Box display="flex" alignItems="center" justifyContent="space-between" mb={3}>
           <Box display="flex" alignItems="center" gap={2}>
             <AccessTime className="text-orange-600" />
             <Typography variant="h6" className="font-inter font-semibold text-neutral-800">
               異常事件時間線
             </Typography>
           </Box>
-          <Chip 
-            label={`${events.length} 個事件`} 
-            color="primary" 
-            variant="outlined" 
-            size="small"
-          />
+          {events.length > 10 && (
+            <Chip
+              label={`顯示最新 10 筆，共 ${events.length} 個事件`}
+              color="primary"
+              variant="outlined"
+              size="small"
+            />
+          )}
         </Box>
-        
-        <Box className="space-y-4">
-          {events.slice(0, 10).map((event, index) => {
-            const { timeString, relativeTime } = formatEventTime(event.time);
-            const isLast = index === events.length - 1;
-            
-            return (
-              <Box key={event.id} display="flex" gap={3} className="relative">
-                {/* 時間線的點和線 */}
-                <Box className="flex flex-col items-center" sx={{ minWidth: 48 }}>
-                  <Box
+
+        <TableContainer component={Paper} elevation={0} sx={{ bgcolor: 'transparent' }}>
+          <Table size="small">
+            <TableHead>
+              <TableRow>
+                <TableCell align="center" sx={{ fontWeight: 600, width: '10%', borderBottom: '2px solid #e5e7eb', whiteSpace: 'nowrap' }}>
+                  狀態
+                </TableCell>
+                <TableCell sx={{ fontWeight: 600, width: '20%', borderBottom: '2px solid #e5e7eb', whiteSpace: 'nowrap' }}>
+                  開始時間
+                </TableCell>
+                <TableCell sx={{ fontWeight: 600, width: '20%', borderBottom: '2px solid #e5e7eb', whiteSpace: 'nowrap' }}>
+                  結束時間
+                </TableCell>
+                <TableCell align="center" sx={{ fontWeight: 600, width: '15%', borderBottom: '2px solid #e5e7eb', whiteSpace: 'nowrap' }}>
+                  持續時間
+                </TableCell>
+                <TableCell sx={{ fontWeight: 600, width: '35%', borderBottom: '2px solid #e5e7eb', whiteSpace: 'nowrap' }}>
+                  原因
+                </TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {pairedEvents.map((pair, index) => {
+                const status = pair.recovery ? 'recovered' : 'ongoing';
+
+                return (
+                  <TableRow
+                    key={`pair-${index}`}
                     sx={{
-                      width: 40,
-                      height: 40,
-                      borderRadius: '50%',
-                      bgcolor: getEventColor(event.type, event.severity),
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      boxShadow: 1
+                      '&:hover': { bgcolor: '#f9fafb' },
+                      '& .MuiTableCell-root': {
+                        borderBottom: '1px solid #f3f4f6',
+                        py: 1.5
+                      }
                     }}
                   >
-                    {getEventIcon(event.type, event.severity)}
-                  </Box>
-                  {!isLast && (
-                    <Box
-                      sx={{
-                        width: 2,
-                        height: 80,
-                        bgcolor: 'divider',
-                        mt: 1
-                      }}
-                    />
-                  )}
-                </Box>
-                
-                {/* 事件內容 */}
-                <Box className="flex-1 pb-4">
-                  <Paper className="p-4 bg-gray-50 rounded-lg" elevation={1}>
-                    <Box display="flex" alignItems="center" gap={2} mb={1}>
-                      <Typography variant="subtitle2" className="font-inter font-semibold text-neutral-800">
-                        {event.title}
-                      </Typography>
-                      {getSeverityChip(event.severity, event.type)}
-                    </Box>
-                    
-                    <Typography variant="body2" className="text-neutral-600 mb-2">
-                      {event.description}
-                    </Typography>
-                    
-                    <Box display="flex" alignItems="center" gap={3} className="text-sm text-neutral-500">
-                      <Box display="flex" alignItems="center" gap={1}>
-                        <AccessTime fontSize="small" />
-                        <span>{timeString}</span>
+                    <TableCell align="center">
+                      <Box display="flex" alignItems="center" justifyContent="center" gap={0.5}>
+                        {getStatusIcon(status)}
+                        <Typography variant="body2" sx={{ fontSize: '14px', fontWeight: 600, color: status === 'recovered' ? '#22c55e' : '#f59e0b' }}>
+                          {status === 'recovered' ? '已恢復' : '進行中'}
+                        </Typography>
                       </Box>
-                      <span>•</span>
-                      <span>{relativeTime}</span>
-                      {event.statusCode && (
-                        <>
-                          <span>•</span>
-                          <span>狀態碼: {event.statusCode}</span>
-                        </>
-                      )}
-                      {event.responseTime && (
-                        <>
-                          <span>•</span>
-                          <span>回應時間: {event.responseTime}ms</span>
-                        </>
-                      )}
-                    </Box>
-                  </Paper>
-                </Box>
-              </Box>
-            );
-          })}
-        </Box>
-        
+                    </TableCell>
+                    <TableCell>
+                      <Typography variant="body2" sx={{ fontSize: '14px', fontWeight: 500 }}>
+                        {pair.outage ? formatShortTime(pair.outage.time) : '-'}
+                      </Typography>
+                    </TableCell>
+                    <TableCell>
+                      <Typography variant="body2" sx={{ fontSize: '14px', fontWeight: 500 }}>
+                        {pair.recovery ? formatShortTime(pair.recovery.time) : '-'}
+                      </Typography>
+                    </TableCell>
+                    <TableCell align="center">
+                      <Typography variant="body2" sx={{
+                        fontSize: '14px',
+                        fontWeight: 500,
+                        color: status === 'recovered' ? '#059669' : '#d97706'
+                      }}>
+                        {calculateDuration(pair)}
+                      </Typography>
+                    </TableCell>
+                    <TableCell>
+                      <Typography variant="body2" sx={{ fontSize: '14px', color: '#374151', fontWeight: 500 }}>
+                        {getReason(pair)}
+                      </Typography>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+        </TableContainer>
+
         {events.length > 10 && (
           <Box textAlign="center" mt={2}>
             <Typography variant="caption" className="text-neutral-500">
-              顯示最近 {events.slice(0, 10).length} 個事件
+              顯示最近 10 個事件
             </Typography>
           </Box>
         )}

@@ -194,9 +194,23 @@ async function generateWebsitePDF(website, stats, metrics, timeRange) {
       // 調整文字位置，確保充分間距
       doc.fontSize(18).fillColor(statusColor)
          .text(`${statusIcon} ${statusText}`, marginX + 20, summaryBoxY + 20, { width: contentWidth - 40, align: 'left' });
-      
+
+      // 檢查實際資料範圍
+      let actualDataRange = timeRangeText;
+      if (metrics && metrics.length > 0) {
+        const firstDataTime = moment(metrics[0].time);
+        const lastDataTime = moment(metrics[metrics.length - 1].time);
+        const actualDays = lastDataTime.diff(firstDataTime, 'days') + 1;
+
+        // 如果實際資料天數少於請求的天數，顯示實際範圍
+        const requestedDays = parseInt(timeRange.replace(/[^\d]/g, '')) || 1;
+        if (timeRange.includes('d') && actualDays < requestedDays) {
+          actualDataRange = `${firstDataTime.format('MM/DD')} - ${lastDataTime.format('MM/DD')} (實際 ${actualDays} 天)`;
+        }
+      }
+
       doc.fontSize(11).fillColor('#666')
-         .text(`基於${timeRangeText}的監控數據分析`, marginX + 20, summaryBoxY + 50, { width: contentWidth - 40, align: 'left' });
+         .text(`基於${actualDataRange}的監控數據分析`, marginX + 20, summaryBoxY + 50, { width: contentWidth - 40, align: 'left' });
       
       // 關鍵績效指標
       doc.fontSize(18).fillColor('#333')
@@ -328,9 +342,11 @@ async function generateWebsitePDF(website, stats, metrics, timeRange) {
         
         // 回應時間趨勢圖表
         if (metrics && metrics.length > 0) {
+          // 根據時間範圍動態生成標題
+          const trendTitle = `${timeRangeText}響應時間趨勢`;
           doc.fontSize(14).fillColor('#666')
              .font('NotoSansTC')
-             .text('24小時響應時間趨勢', marginX, 110);
+             .text(trendTitle, marginX, 110);
           
           drawEnhancedResponseChart(doc, metrics, marginX, 140, timeRange);
           
@@ -597,10 +613,10 @@ function drawEnhancedResponseChart(doc, metrics, x, y, timeRange) {
       doc.moveTo(x + 10, gridY).lineTo(x + chartWidth - 10, gridY).stroke();
     }
     
-    // 繪製優雅的網格線 (垂直) - 每3小時一條
-    const timeSteps = 8; // 24小時除以3小時 = 8個時間段
+    // 繪製優雅的網格線 (垂直) - 根據時間範圍調整
+    const timeSteps = getTimeSteps(timeRange); // 根據時間範圍動態計算時間段數
     doc.strokeColor('#F0F3F6').lineWidth(0.5);
-    for (let i = 1; i <= 7; i++) { // 畫7條內部線條
+    for (let i = 1; i <= timeSteps - 1; i++) { // 畫內部線條
       const gridX = x + (chartWidth / timeSteps) * i;
       doc.moveTo(gridX, y + 10).lineTo(gridX, y + chartHeight - 10).stroke();
     }
@@ -738,16 +754,56 @@ function drawEnhancedResponseChart(doc, metrics, x, y, timeRange) {
       doc.text(`${Math.round(labelValue)}ms`, x - 40, labelY - 5);
     }
     
-    // X軸時間標籤 - 每3小時顯示一次
-    const currentTime = new Date();
+    // X軸時間標籤 - 使用實際資料的時間
     doc.fontSize(9).fillColor('#666').font('NotoSansTC');
-    for (let i = 0; i <= timeSteps; i++) {
-      const timeOffset = (24 / timeSteps) * (timeSteps - i); // 每3小時
-      const timeLabel = new Date(currentTime.getTime() - (timeOffset * 60 * 60 * 1000));
-      const labelX = x + (chartWidth / timeSteps) * i;
-      
-      doc.text(timeLabel.getHours().toString().padStart(2, '0') + ':00', 
-               labelX - 12, y + chartHeight + 8);
+    const totalHours = getTimeRangeHours(timeRange);
+
+    // 如果有實際資料，使用資料的時間範圍
+    if (metrics.length > 0) {
+      // 根據 timeSteps 選擇要顯示的標籤索引
+      const labelInterval = Math.max(1, Math.floor(metrics.length / timeSteps));
+
+      for (let i = 0; i <= timeSteps; i++) {
+        const dataIndex = Math.min(i * labelInterval, metrics.length - 1);
+        const metric = metrics[dataIndex];
+
+        if (metric && metric.time) {
+          const timeLabel = new Date(metric.time);
+          const labelX = x + (chartWidth / timeSteps) * i;
+
+          // 根據時間範圍決定標籤格式
+          let labelText = '';
+          if (totalHours <= 24) {
+            labelText = timeLabel.getHours().toString().padStart(2, '0') + ':00';
+          } else if (totalHours <= 168) { // 7天內
+            labelText = `${timeLabel.getMonth() + 1}/${timeLabel.getDate()}`;
+          } else {
+            labelText = `${timeLabel.getMonth() + 1}/${timeLabel.getDate()}`;
+          }
+
+          doc.text(labelText, labelX - 12, y + chartHeight + 8);
+        }
+      }
+    } else {
+      // 沒有資料時使用原本的邏輯（從當前時間回推）
+      const currentTime = new Date();
+
+      for (let i = 0; i <= timeSteps; i++) {
+        const timeOffset = (totalHours / timeSteps) * (timeSteps - i);
+        const timeLabel = new Date(currentTime.getTime() - (timeOffset * 60 * 60 * 1000));
+        const labelX = x + (chartWidth / timeSteps) * i;
+
+        let labelText = '';
+        if (totalHours <= 24) {
+          labelText = timeLabel.getHours().toString().padStart(2, '0') + ':00';
+        } else if (totalHours <= 168) {
+          labelText = `${timeLabel.getMonth() + 1}/${timeLabel.getDate()}`;
+        } else {
+          labelText = `${timeLabel.getMonth() + 1}/${timeLabel.getDate()}`;
+        }
+
+        doc.text(labelText, labelX - 12, y + chartHeight + 8);
+      }
     }
     
     // 圖例放置在圖表中央下方，增加與圖表的間距
@@ -774,6 +830,40 @@ function drawEnhancedResponseChart(doc, metrics, x, y, timeRange) {
     doc.strokeColor('#0D47A1').lineWidth(2);
     doc.moveTo(legend2X, legendY).lineTo(legend2X + 20, legendY).stroke();
     doc.fillColor('#555').text('趨勢線', legend2X + 25, legendY - 4);
+  }
+}
+
+// 根據時間範圍返回時間段數
+function getTimeSteps(timeRange) {
+  switch(timeRange) {
+    case '1h': return 6;   // 6個10分鐘段
+    case '3h': return 6;   // 6個30分鐘段
+    case '6h': return 6;   // 6個1小時段
+    case '12h': return 6;  // 6個2小時段
+    case '24h': return 8;  // 8個3小時段
+    case '2d': return 8;   // 8個6小時段
+    case '7d': return 7;   // 7個1天段
+    case '14d': return 7;  // 7個2天段
+    case '30d': return 6;  // 6個5天段
+    case '90d': return 6;  // 6個15天段
+    default: return 8;
+  }
+}
+
+// 根據時間範圍返回總小時數
+function getTimeRangeHours(timeRange) {
+  switch(timeRange) {
+    case '1h': return 1;
+    case '3h': return 3;
+    case '6h': return 6;
+    case '12h': return 12;
+    case '24h': return 24;
+    case '2d': return 48;
+    case '7d': return 168;
+    case '14d': return 336;
+    case '30d': return 720;
+    case '90d': return 2160;
+    default: return 24;
   }
 }
 

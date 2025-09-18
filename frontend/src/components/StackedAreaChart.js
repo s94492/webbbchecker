@@ -207,11 +207,8 @@ const StackedAreaChart = ({ data, title = "回應時間組成分析" }) => {
 
   // 根據資料量決定 X 軸顯示間隔
   const getXAxisInterval = () => {
-    const dataLength = processedData.length;
-    if (dataLength <= 50) return 0; // 顯示所有
-    if (dataLength <= 200) return Math.floor(dataLength / 20); // 顯示約20個
-    if (dataLength <= 500) return Math.floor(dataLength / 15); // 顯示約15個
-    return Math.floor(dataLength / 10); // 顯示約10個
+    // 使用 preserveEnd 保留有內容的標籤
+    return 'preserveEnd';
   };
 
   return (
